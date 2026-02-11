@@ -17,17 +17,17 @@ python3 --version
 
 ## 2. Get the code
 
-**Option A – Clone from GitHub (if your repo is public or you have SSH key set up):**
+**Option A – Clone from GitHub (scheduling branch):**
 
 ```bash
 sudo mkdir -p /opt/sauna
 sudo chown "$USER:$USER" /opt/sauna
 cd /opt/sauna
-git clone https://github.com/stevetheaiassistant/sauna_control.git .
+git clone -b On-Scheduling https://github.com/stevetheaiassistant/sauna_control.git .
 cd backend_ui
 ```
 
-The app runs from the `backend_ui` directory (where `server.py` and `requirements.txt` live).
+This clones the **On-Scheduling** branch (schedule + UI, no duration). The app runs from the `backend_ui` directory (where `server.py` and `requirements.txt` live).
 
 **Option B – Copy only backend_ui from your machine:**
 
@@ -37,7 +37,7 @@ On your Mac, from the project directory:
 scp -r backend_ui user@YOUR_VPS_IP:/opt/sauna/
 ```
 
-Then on the VPS you’ll use `/opt/sauna/backend_ui` as the app directory. The steps below use `APP_DIR` so you can set it once.
+Then on the VPS use `/opt/sauna/backend_ui` as the app directory for the steps below.
 
 ## 3. Python app setup
 
