@@ -11,10 +11,10 @@ Web app and hardware to retrofit to existing sauna for wireless power on/off con
 ## Project structure
 ```
 sauna_control/
-├── backend_ui/       # FastAPI server + embedded UI (server.py, .env.example, requirements.txt)
-├── firmware/        # ESP32 sketch + secrets.h.example
-├── docs/             # spec, architecture, deploy
-└── ops/              # deploy notes
+├── backend_ui/                    # FastAPI server + embedded UI (server.py, .env.example, requirements.txt)
+├── firmware/Sauna_Control_ESP32/  # ESP32 sketch (.ino) + secrets.h.example
+├── docs/                          # spec, architecture, deploy
+└── ops/                           # deploy notes
 ```
 
 ## Backend (API + UI)
@@ -31,7 +31,7 @@ uvicorn server:app --reload
 Open http://127.0.0.1:8000 for the UI. See [docs/architecture.md](docs/architecture.md) for deploy (systemd).
 
 ## Firmware (ESP32)
-Copy `firmware/secrets.h.example` to `firmware/secrets.h` and set WiFi, API host, device id, and device token (same value as `SAUNA_DEVICE_TOKEN` on the server). Do not commit `secrets.h`.
+Open the sketch from `firmware/Sauna_Control_ESP32/` in Arduino IDE or PlatformIO. Copy `firmware/Sauna_Control_ESP32/secrets.h.example` to `firmware/Sauna_Control_ESP32/secrets.h` and set WiFi, API host, device id, and device token (same value as `SAUNA_DEVICE_TOKEN` on the server). Do not commit `secrets.h`.
 
 ### ESP32 GPIO pinout
 
