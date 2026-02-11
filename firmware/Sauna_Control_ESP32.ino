@@ -7,16 +7,13 @@
 #include <Preferences.h>
 #include <math.h>
 
-// -------------------- User Config --------------------
-static const char* WIFI_SSID = "NSA Surveillance Van";
-static const char* WIFI_PASS = "i love fiber17!";
-
-// Your VPS domain (recommended) or IP (NO https:// here)
-static const char* API_HOST = "sauna.wilsondesignllc.com";   // e.g. "sauna.yourdomain.com"
-
-// Must match your server.py settings
-static const char* DEVICE_ID    = "sauna-1";
-static const char* DEVICE_TOKEN = "bFeEmYJ-2nrHoBNWqtS309jbsS0_32TCe559y0MtPT8";
+// -------------------- User Config (secrets in secrets.h, not in repo) --------------------
+#include "secrets.h"
+static const char* WIFI_SSID = WIFI_SSID;
+static const char* WIFI_PASS = WIFI_PASS;
+static const char* API_HOST = API_HOST;
+static const char* DEVICE_ID = DEVICE_ID;
+static const char* DEVICE_TOKEN = DEVICE_TOKEN;
 
 // Polling
 static const uint32_t POLL_INTERVAL_MS = 3000;

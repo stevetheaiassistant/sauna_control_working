@@ -1,0 +1,25 @@
+# Secrets (never commit)
+.env
+*.env.local
+firmware/secrets.h
+
+# Backend
+sauna.db
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+.eggs/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build / firmware (optional; uncomment if you generate binaries in-repo)
+# firmware/build/
