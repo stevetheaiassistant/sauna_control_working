@@ -2,6 +2,7 @@
 .env
 *.env.local
 firmware/secrets.h
+**/secrets.h
 
 # Backend
 sauna.db
