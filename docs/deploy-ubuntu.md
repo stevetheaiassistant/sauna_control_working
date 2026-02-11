@@ -1,0 +1,203 @@
+# Deploy sauna_control backend on Ubuntu VPS
+
+Step-by-step guide to run the FastAPI server (with schedule + UI) on a fresh Ubuntu VPS.
+
+## 1. Prerequisites on the VPS
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-pip python3-venv git
+```
+
+Check Python version (need 3.9+):
+
+```bash
+python3 --version
+```
+
+## 2. Get the code
+
+**Option A – Clone from GitHub (if your repo is public or you have SSH key set up):**
+
+```bash
+sudo mkdir -p /opt/sauna
+sudo chown "$USER:$USER" /opt/sauna
+cd /opt/sauna
+git clone https://github.com/stevetheaiassistant/sauna_control.git .
+cd backend_ui
+```
+
+The app runs from the `backend_ui` directory (where `server.py` and `requirements.txt` live).
+
+**Option B – Copy only backend_ui from your machine:**
+
+On your Mac, from the project directory:
+
+```bash
+scp -r backend_ui user@YOUR_VPS_IP:/opt/sauna/
+```
+
+Then on the VPS you’ll use `/opt/sauna/backend_ui` as the app directory. The steps below use `APP_DIR` so you can set it once.
+
+## 3. Python app setup
+
+On the VPS, go to the app directory. If you cloned the full repo, that’s `backend_ui`:
+
+```bash
+# If you cloned: you're already in /opt/sauna; then:
+cd /opt/sauna/backend_ui
+
+# Or if you copied only backend_ui:
+cd /opt/sauna/backend_ui
+
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+## 4. Configure secrets
+
+From the **backend_ui** directory (so `server.py` is in the current folder):
+
+```bash
+cd /opt/sauna/backend_ui
+cp .env.example .env
+nano .env   # or vim / your editor
+```
+
+Set **at least** these (no quotes needed; replace with your real values):
+
+- `SAUNA_DEVICE_TOKEN` – same value you put in the ESP32 `secrets.h` as `DEVICE_TOKEN`.
+- `SAUNA_APP_TOKEN` – a secret you’ll paste into the web UI “Auth” field (e.g. generate with `openssl rand -hex 24`).
+
+Optional:
+
+- `SAUNA_DEVICE_ID=sauna-1` (default)
+- `SAUNA_DB=sauna.db` (default; will be created in the current directory)
+
+Save and exit. **Do not commit `.env`.**
+
+## 5. Test run
+
+```bash
+cd /opt/sauna/backend_ui
+source venv/bin/activate
+uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+- From the VPS: `curl http://127.0.0.1:8000/` should return HTML.
+- From your computer: open `http://YOUR_VPS_IP:8000/` (if the firewall allows port 8000).
+
+Stop with `Ctrl+C` when done testing.
+
+## 6. Run as a systemd service (survives reboot)
+
+Create the service file:
+
+```bash
+sudo nano /etc/systemd/system/sauna.service
+```
+
+Paste this (replace `YOUR_USERNAME`; paths assume app is in `/opt/sauna/backend_ui`):
+
+```ini
+[Unit]
+Description=Sauna Control API
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/opt/sauna/backend_ui
+EnvironmentFile=/opt/sauna/backend_ui/.env
+ExecStart=/opt/sauna/backend_ui/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Replace `YOUR_USERNAME` with your actual Linux username (e.g. `ubuntu` on many clouds).
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable sauna
+sudo systemctl start sauna
+sudo systemctl status sauna
+```
+
+Useful commands later:
+
+- Logs: `sudo journalctl -u sauna -f`
+- Restart: `sudo systemctl restart sauna`
+
+## 7. Firewall (allow port 8000)
+
+If you use `ufw`:
+
+```bash
+sudo ufw allow 8000/tcp
+sudo ufw status
+sudo ufw enable   # if you haven’t already
+```
+
+Then the UI is at `http://YOUR_VPS_IP:8000/`.
+
+## 8. Optional: HTTPS with a domain
+
+If you have a domain (e.g. `sauna-test.yourdomain.com`) pointing at the VPS:
+
+1. Install a reverse proxy, e.g. Caddy (handles TLS automatically):
+
+   ```bash
+   sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+   sudo apt update
+   sudo apt install caddy
+   ```
+
+2. Configure Caddy to proxy to the app (replace with your domain):
+
+   ```bash
+   sudo nano /etc/caddy/Caddyfile
+   ```
+
+   Add:
+
+   ```
+   sauna-test.yourdomain.com {
+       reverse_proxy localhost:8000
+   }
+   ```
+
+   Then:
+
+   ```bash
+   sudo systemctl reload caddy
+   ```
+
+3. Open firewall for HTTP/HTTPS:
+
+   ```bash
+   sudo ufw allow 80/tcp
+   sudo ufw allow 443/tcp
+   sudo ufw reload
+   ```
+
+4. In the ESP32 `secrets.h`, set `API_HOST` to that domain (e.g. `sauna-test.yourdomain.com`) so the device talks HTTPS to the VPS.
+
+---
+
+## Quick checklist
+
+- [ ] Python 3.9+ and venv created
+- [ ] `pip install -r requirements.txt` in venv
+- [ ] `.env` created in `backend_ui/` from `.env.example` with `SAUNA_DEVICE_TOKEN` and `SAUNA_APP_TOKEN`
+- [ ] Test: `uvicorn server:app --host 0.0.0.0 --port 8000` and open UI in browser
+- [ ] systemd service installed and `systemctl status sauna` shows active
+- [ ] Firewall allows 8000 (or 80/443 if using Caddy)
+- [ ] ESP32 `secrets.h` has same `DEVICE_TOKEN` and `API_HOST` pointing to this VPS

@@ -1,7 +1,7 @@
 # sauna_control
 Web app and hardware to retrofit to existing sauna for wireless power on/off control.
 
-**How it works:** The ESP32 polls the API for “desired” on/off, drives relays to match, and posts telemetry (temp, power/heat). The web UI lets you set desired state; the device and server stay in sync via tokens and versioning.
+**How it works:** The ESP32 polls the API for “desired” on/off, drives relays to match, and posts telemetry (temp, power/heat). The web UI lets you toggle the sauna or add **scheduled sessions** (date, time, preheat). When online, the server is the source of truth; when WiFi is down, the device uses its cached schedule so it can still turn the sauna on at the scheduled preheat time.
 
 ## Prerequisites
 - **Backend:** Python 3.9+
@@ -28,7 +28,7 @@ pip install -r requirements.txt
 uvicorn server:app --reload
 ```
 
-Open http://127.0.0.1:8000 for the UI. See [docs/architecture.md](docs/architecture.md) for deploy (systemd).
+Open http://127.0.0.1:8000 for the UI. To run on an Ubuntu VPS (systemd, optional HTTPS): [docs/deploy-ubuntu.md](docs/deploy-ubuntu.md).
 
 ## Firmware (ESP32)
 Open the sketch from `firmware/Sauna_Control_ESP32/` in Arduino IDE or PlatformIO. Copy `firmware/Sauna_Control_ESP32/secrets.h.example` to `firmware/Sauna_Control_ESP32/secrets.h` and set WiFi, API host, device id, and device token (same value as `SAUNA_DEVICE_TOKEN` on the server). Do not commit `secrets.h`.
@@ -45,6 +45,12 @@ Open the sketch from `firmware/Sauna_Control_ESP32/` in Arduino IDE or PlatformI
 
 Outputs drive relays (e.g. optocoupler/relay boards); pulse length is 200 ms. Power-on sequence: pulse power toggle → wait 2 s → if power is on, pulse start.
 
+## Schedule
+- In the web UI **Schedule** section, add sessions with **date**, **time** (local), and **preheat** (minutes before that time to turn on).
+- The device turns the sauna **on** at (scheduled time − preheat). It does **not** auto-off; you or the sauna’s built-in controller turn it off.
+- Schedules are stored on the server and synced to the ESP32 (about every 60 s). The device caches them in NVS and uses NTP for time so it can run scheduled on even when WiFi is down.
+- Manual test steps: [docs/schedule-test-plan.md](docs/schedule-test-plan.md).
+
 ## Troubleshooting
 | Symptom | Likely cause |
 |--------|----------------|
@@ -53,5 +59,6 @@ Outputs drive relays (e.g. optocoupler/relay boards); pulse length is 200 ms. Po
 | **No telemetry** / “No telemetry yet” | Device not reaching server (WiFi, wrong API host, or 403). Check Serial monitor for HTTP codes and DNS. |
 | **Temp stays --.-°F** | DS18B20 not connected, wrong GPIO (26), or bad 1-Wire wiring (data + 3.3 V + GND, 4.7 kΩ pull-up often used). |
 | **Desired never applies** | Power/heat input wiring or logic; device only acts when desired ≠ actual and retries every 10 s. |
+| **Schedule not syncing** | Device polls schedule every 60 s when online. Check Serial for “Schedule synced”; ensure NTP sync (“NTP sync OK”) so time is correct. |
 
 More detail: [docs/spec.md](docs/spec.md), [docs/architecture.md](docs/architecture.md).
