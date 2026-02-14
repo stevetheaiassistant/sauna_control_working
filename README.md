@@ -1,9 +1,9 @@
 # sauna_control
 Web app and hardware to retrofit to existing sauna for wireless power on/off control.
 
-**Branches:** `main` = prototype (toggle + telemetry). `On-Scheduling` = schedule feature (calendar, preheat, offline). Use `On-Scheduling` for new deploys.
+**Branches:** `main` = stable (toggle + telemetry + schedule). Deploy from `main`.
 
-**How it works:** The ESP32 polls the API for “desired” on/off, drives relays to match, and posts telemetry (temp, power/heat). The web UI lets you toggle the sauna or add **scheduled sessions** (date, time, preheat). When online, the server is the source of truth; when WiFi is down, the device uses its cached schedule so it can still turn the sauna on at the scheduled preheat time.
+**How it works:** The ESP32 polls the API for “desired” on/off, drives relays to match, and posts telemetry (temp, power/heat). The web UI lets you toggle the sauna or add **scheduled sessions** (date, time). When online, the server is the source of truth; when WiFi is down, the device uses its cached schedule so it can still turn the sauna on at the scheduled time.
 
 ## Prerequisites
 - **Backend:** Python 3.9+
@@ -48,9 +48,10 @@ Open the sketch from `firmware/Sauna_Control_ESP32/` in Arduino IDE or PlatformI
 Outputs drive relays (e.g. optocoupler/relay boards); pulse length is 200 ms. Power-on sequence: pulse power toggle → wait 2 s → if power is on, pulse start.
 
 ## Schedule
-- In the web UI **Schedule** section, add sessions with **date**, **time** (local), and **preheat** (minutes before that time to turn on).
-- The device turns the sauna **on** at (scheduled time − preheat). It does **not** auto-off; you or the sauna’s built-in controller turn it off.
-- Schedules are stored on the server and synced to the ESP32 (about every 60 s). The device caches them in NVS and uses NTP for time so it can run scheduled on even when WiFi is down.
+- In the web UI **Schedule** section, add sessions with **date** and **time** (local).
+- The device turns the sauna **on** at the scheduled time. You or the sauna’s built-in controller turn it off.
+- Sessions disappear from the UI 2+ minutes after their start time (executed).
+- Schedules are stored on the server and synced to the ESP32 every 30 s. The device caches them in NVS and uses NTP for time so it can run scheduled on even when WiFi is down.
 - Manual test steps: [docs/schedule-test-plan.md](docs/schedule-test-plan.md).
 
 ## Troubleshooting
@@ -61,9 +62,9 @@ Outputs drive relays (e.g. optocoupler/relay boards); pulse length is 200 ms. Po
 | **No telemetry** / “No telemetry yet” | Device not reaching server (WiFi, wrong API host, or 403). Check Serial monitor for HTTP codes and DNS. |
 | **Temp stays --.-°F** | DS18B20 not connected, wrong GPIO (26), or bad 1-Wire wiring (data + 3.3 V + GND, 4.7 kΩ pull-up often used). |
 | **Desired never applies** | Power/heat input wiring or logic; device only acts when desired ≠ actual and retries every 10 s. |
-| **Schedule not syncing** | Device polls schedule every 60 s when online. Check Serial for “Schedule synced”; ensure NTP sync (“NTP sync OK”) so time is correct. |
+| **Schedule not syncing** | Device polls schedule every 30 s when online. Check Serial for “Schedule synced”; ensure NTP sync (“NTP sync OK”) so time is correct. |
 
-| **ESP32 crashes / freezes** | HTTPS is memory-heavy. Arduino IDE: Tools → Arduino ESP32 Configuration → Loop task stack size → set to 8192. Ensure strong WiFi. |
+| **ESP32 crashes / freezes** | Polling too fast causes HTTPS overload. Stable config: 3s desired, 5s telemetry, 30s schedule. Add `platform.local.txt` for loop stack size (see [deploy-ubuntu](docs/deploy-ubuntu.md)). Ensure strong WiFi. |
 
 More detail: [docs/spec.md](docs/spec.md), [docs/architecture.md](docs/architecture.md).
 

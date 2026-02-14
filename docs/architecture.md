@@ -19,7 +19,7 @@
 |-------|---------|
 | `desired_state` | Per-device desired on/off + version (for immediate toggles) |
 | `telemetry_latest` | Latest telemetry per device (temp, power_in, heat_in, rssi, time_synced, epoch_utc, schedule_version) |
-| `schedule_sessions` | Sessions: device_id, start_time_utc, duration_min, preheat_min, enabled, note |
+| `schedule_sessions` | Sessions: device_id, start_time_utc, enabled (duration_min/preheat_min/note legacy, stored as 0/0/"" for new sessions) |
 | `schedule_meta` | Per-device schedule_version (monotonic, for cache invalidation) |
 
 ## Deploy
@@ -42,12 +42,11 @@ sauna_control/
 
 ## Deploy flow
 
-1. Commit and push to `On-Scheduling`.
-2. SSH to VPS: `ssh root@74.208.133.101 'cd /opt/sauna && git pull origin On-Scheduling && systemctl restart sauna'`
-3. Check: `ssh root@74.208.133.101 'systemctl status sauna'`
+1. From project root: `scp -r backend_ui root@74.208.133.101:/opt/sauna/`
+2. Restart: `ssh root@74.208.133.101 "systemctl restart sauna && systemctl status sauna"`
 
 ## ESP32 behavior summary
 
-- **Online**: Poll desired every 3 s, schedule every 60 s. Server desired is source of truth; if schedule session active, keep ON (reconciliation).
-- **Offline**: Use cached schedule + NTP-derived time. Turn ON at (start - preheat). No auto-off.
+- **Online**: Poll desired every 3 s, telemetry every 5 s, schedule every 30 s. Server desired is source of truth; if schedule session active, keep ON (reconciliation).
+- **Offline**: Use cached schedule + NTP-derived time. Turn ON at start time. No auto-off.
 - **Time**: NTP on WiFi connect; store epoch_at_sync + millis for offline time (valid until reboot).

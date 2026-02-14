@@ -6,10 +6,11 @@
 - **Firmware**: `secrets.h` (copy from `secrets.h.example`), gitignored. Never commit real credentials.
 - **Ops**: `ops/local-credentials` (gitignored) — VPS SSH, GitHub PAT, tokens. Used for deploy; never commit.
 
-## Schedule: no duration
+## Schedule: date/time only
 
+- Session = `start_time_utc` + `enabled`. No preheat, duration, or notes in the UI or API.
 - User or sauna's built-in controller turns the sauna off. No automatic turn-off from schedule.
-- `duration_min` stored as 0; device treats 0 as "no auto-off" (keeps ON for 24h from start as a practical upper bound).
+- Sessions disappear from the UI 2+ minutes after their start time (executed).
 
 ## Offline schedule
 
@@ -27,4 +28,4 @@
 
 ## Vanilla JS
 
-- No frameworks. UI is embedded HTML in `server.py`. Schedule and state poll every 5 s.
+- No frameworks. UI is embedded HTML in `server.py`. State polls every 5 s, schedule list every 3 s.

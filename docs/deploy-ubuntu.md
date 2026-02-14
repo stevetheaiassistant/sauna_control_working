@@ -17,17 +17,17 @@ python3 --version
 
 ## 2. Get the code
 
-**Option A – Clone from GitHub (scheduling branch):**
+**Option A – Clone from GitHub (main branch):**
 
 ```bash
 sudo mkdir -p /opt/sauna
 sudo chown "$USER:$USER" /opt/sauna
 cd /opt/sauna
-git clone -b On-Scheduling https://github.com/stevetheaiassistant/sauna_control.git .
+git clone https://github.com/stevetheaiassistant/sauna_control.git .
 cd backend_ui
 ```
 
-This clones the **On-Scheduling** branch (schedule + UI, no duration). The app runs from the `backend_ui` directory (where `server.py` and `requirements.txt` live).
+This clones the **main** branch (stable: toggle + telemetry + schedule). The app runs from the `backend_ui` directory (where `server.py` and `requirements.txt` live).
 
 **If Git asks for username/password:** GitHub no longer accepts account passwords for HTTPS. Use one of these:
 
@@ -42,7 +42,7 @@ This clones the **On-Scheduling** branch (schedule + UI, no duration). The app r
 
   ```bash
   cd /opt/sauna
-  git clone -b On-Scheduling git@github.com:stevetheaiassistant/sauna_control.git .
+  git clone git@github.com:stevetheaiassistant/sauna_control.git .
   cd backend_ui
   ```
 
@@ -232,6 +232,34 @@ The firmware uses HTTPS when `API_HOST` has no port (e.g. domain only). For plai
 
 - **HTTPS**: `https://sauna1.wilsondesignllc.com/`
 - The sauna app and ESP32 will communicate over encrypted HTTPS.
+
+---
+
+## 10. Deploy updates (after code changes)
+
+From your Mac, in the project directory:
+
+```bash
+scp -r backend_ui root@YOUR_VPS_IP:/opt/sauna/
+ssh root@YOUR_VPS_IP "systemctl restart sauna && systemctl status sauna"
+```
+
+Replace `YOUR_VPS_IP` with your VPS IP (e.g. `74.208.133.101`). This copies the updated `backend_ui` folder and restarts the sauna service.
+
+---
+
+## 11. ESP32 stability (platform.local.txt)
+
+If the ESP32 crashes or freezes under HTTPS load, increase the main loop stack size. Create this file in your Arduino ESP32 hardware folder:
+
+**Path:** `~/Arduino/hardware/espressif/esp32/platform.local.txt` (or equivalent for PlatformIO)
+
+**Content:**
+```
+compiler.c.extra_flags=-DARDUINO_LOOP_STACK_SIZE=16384
+```
+
+Then recompile and flash. Stable poll intervals: 3s desired, 5s telemetry, 30s schedule.
 
 ---
 

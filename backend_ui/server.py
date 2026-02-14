@@ -126,6 +126,16 @@ def iso_to_epoch(iso: str) -> int:
     return int(datetime.fromisoformat(s).timestamp())
 
 
+def delete_past_schedule_sessions(cur, device_id: str) -> bool:
+    """Delete sessions whose start time was more than 2 min ago (executed). Returns True if any deleted."""
+    cur.execute(
+        """DELETE FROM schedule_sessions WHERE device_id = ?
+           AND datetime(start_time_utc) < datetime('now', '-2 minutes')""",
+        (device_id,),
+    )
+    return cur.rowcount > 0
+
+
 app = FastAPI(title="Sauna Control", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -158,18 +168,12 @@ class TelemetryIn(BaseModel):
 
 class ScheduleSessionCreate(BaseModel):
     start_time_utc: str  # ISO 8601
-    duration_min: int = 0  # 0 = no auto-off (sauna controller or user turns off)
-    preheat_min: int = 30
     enabled: int = 1
-    note: Optional[str] = None
 
 
 class ScheduleSessionUpdate(BaseModel):
     start_time_utc: Optional[str] = None
-    duration_min: Optional[int] = None
-    preheat_min: Optional[int] = None
     enabled: Optional[int] = None
-    note: Optional[str] = None
 
 
 # --- Device endpoints ---
@@ -202,6 +206,9 @@ def get_device_schedule(device_id: str, request: Request, since: Optional[str] =
 
     conn = db()
     cur = conn.cursor()
+    if delete_past_schedule_sessions(cur, device_id):
+        bump_schedule_version(cur, device_id)
+        conn.commit()
     cur.execute("SELECT schedule_version, updated_at FROM schedule_meta WHERE device_id = ?", (device_id,))
     meta = cur.fetchone()
     version = int(meta["schedule_version"]) if meta else 0
@@ -219,8 +226,6 @@ def get_device_schedule(device_id: str, request: Request, since: Optional[str] =
     for r in rows:
         sessions.append({
             "start_time_epoch_utc": iso_to_epoch(r["start_time_utc"]),
-            "duration_min": int(r["duration_min"]),
-            "preheat_min": int(r["preheat_min"]),
             "enabled": int(r["enabled"]),
         })
 
@@ -384,6 +389,9 @@ def app_get_schedule(device_id: str, request: Request):
 
     conn = db()
     cur = conn.cursor()
+    if delete_past_schedule_sessions(cur, device_id):
+        bump_schedule_version(cur, device_id)
+        conn.commit()
     cur.execute(
         """SELECT id, start_time_utc, duration_min, preheat_min, enabled, note, updated_at
            FROM schedule_sessions WHERE device_id = ?
@@ -398,10 +406,7 @@ def app_get_schedule(device_id: str, request: Request):
         sessions.append({
             "id": r["id"],
             "start_time_utc": r["start_time_utc"],
-            "duration_min": int(r["duration_min"]),
-            "preheat_min": int(r["preheat_min"]),
             "enabled": int(r["enabled"]),
-            "note": r["note"],
             "updated_at": r["updated_at"],
         })
     return {"sessions": sessions}
@@ -420,7 +425,7 @@ def app_create_schedule(device_id: str, payload: ScheduleSessionCreate, request:
     cur.execute("""
         INSERT INTO schedule_sessions (device_id, start_time_utc, duration_min, preheat_min, enabled, note, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (device_id, payload.start_time_utc, payload.duration_min, payload.preheat_min, payload.enabled, payload.note or "", now))
+    """, (device_id, payload.start_time_utc, 0, 0, payload.enabled, "", now))
     sid = cur.lastrowid
     conn.commit()
     conn.close()
@@ -445,18 +450,9 @@ def app_update_schedule(device_id: str, session_id: int, payload: ScheduleSessio
     if payload.start_time_utc is not None:
         updates.append("start_time_utc = ?")
         args.append(payload.start_time_utc)
-    if payload.duration_min is not None:
-        updates.append("duration_min = ?")
-        args.append(payload.duration_min)
-    if payload.preheat_min is not None:
-        updates.append("preheat_min = ?")
-        args.append(payload.preheat_min)
     if payload.enabled is not None:
         updates.append("enabled = ?")
         args.append(payload.enabled)
-    if payload.note is not None:
-        updates.append("note = ?")
-        args.append(payload.note)
 
     if updates:
         now = utc_now_iso()
@@ -573,14 +569,6 @@ UI_HTML = f"""
         <label>Time (local)</label>
         <input type="time" id="schedTime"/>
       </div>
-      <div class="form-row">
-        <label>Preheat (min)</label>
-        <input type="number" id="schedPreheat" value="30" min="0" max="120"/>
-      </div>
-      <div class="form-row">
-        <label>Note</label>
-        <input type="text" id="schedNote" placeholder="Optional"/>
-      </div>
       <div class="row">
         <button class="btn" id="schedAddBtn">Add session</button>
       </div>
@@ -668,7 +656,7 @@ async function fetchSchedule() {{
   list.innerHTML = "";
   scheduleSessionsList.forEach(s => {{
     const li = document.createElement("li");
-    li.innerHTML = `<span>${{formatLocal(s.start_time_utc)}} · preheat ${{s.preheat_min}}m ${{s.note ? "· " + s.note : ""}}</span>
+    li.innerHTML = `<span>${{formatLocal(s.start_time_utc)}}</span>
       <div class="actions">
         <button class="btn" data-edit-id="${{s.id}}">Edit</button>
         <button class="btn" data-delete="${{s.id}}">Delete</button>
@@ -681,8 +669,6 @@ async function fetchSchedule() {{
     if (!s) return;
     document.getElementById("schedDate").value = s.start_time_utc.slice(0, 10);
     document.getElementById("schedTime").value = new Date(s.start_time_utc).toTimeString().slice(0, 5);
-    document.getElementById("schedPreheat").value = s.preheat_min;
-    document.getElementById("schedNote").value = s.note || "";
     document.getElementById("schedAddBtn").dataset.editId = s.id;
   }}));
 }}
@@ -694,14 +680,12 @@ async function addOrUpdateSession() {{
   const timeStr = document.getElementById("schedTime").value;
   const utcIso = localToUtcIso(dateStr, timeStr);
   if (!utcIso) {{ alert("Set date and time"); return; }}
-  const preheat = parseInt(document.getElementById("schedPreheat").value, 10) || 30;
-  const note = document.getElementById("schedNote").value.trim() || null;
   const editId = document.getElementById("schedAddBtn").dataset.editId;
   if (editId) {{
     const res = await fetch(`${{scheduleUrl}}/${{editId}}`, {{
       method: "PUT",
       headers: {{ "Authorization": "Bearer " + token, "Content-Type": "application/json" }},
-      body: JSON.stringify({{ start_time_utc: utcIso, preheat_min: preheat, note }})
+      body: JSON.stringify({{ start_time_utc: utcIso }})
     }});
     if (!res.ok) {{ alert("Update failed"); return; }}
     delete document.getElementById("schedAddBtn").dataset.editId;
@@ -709,7 +693,7 @@ async function addOrUpdateSession() {{
     const res = await fetch(scheduleUrl, {{
       method: "POST",
       headers: {{ "Authorization": "Bearer " + token, "Content-Type": "application/json" }},
-      body: JSON.stringify({{ start_time_utc: utcIso, duration_min: 0, preheat_min: preheat, enabled: 1, note }})
+      body: JSON.stringify({{ start_time_utc: utcIso, enabled: 1 }})
     }});
     if (!res.ok) {{ alert("Add failed"); return; }}
   }}
@@ -742,7 +726,8 @@ document.getElementById("schedAddBtn").addEventListener("click", addOrUpdateSess
 
 fetchState();
 fetchSchedule();
-setInterval(() => {{ fetchState(); fetchSchedule(); }}, 5000);
+setInterval(fetchState, 5000);
+setInterval(fetchSchedule, 3000);
 </script>
 </body>
 </html>

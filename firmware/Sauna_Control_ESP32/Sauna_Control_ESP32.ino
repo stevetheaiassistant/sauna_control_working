@@ -15,10 +15,10 @@ static const char* api_host      = SECRET_API_HOST;  // e.g. "sauna1.wilsondesig
 static const char* device_id     = SECRET_DEVICE_ID;
 static const char* device_token  = SECRET_DEVICE_TOKEN;
 
-// Polling
-static const uint32_t POLL_INTERVAL_MS = 5000;
-static const uint32_t TELEMETRY_INTERVAL_MS = 10000;
-static const uint32_t SCHEDULE_POLL_INTERVAL_MS = 60000;
+// Polling (balance responsiveness vs HTTPS stability)
+static const uint32_t POLL_INTERVAL_MS = 3000;
+static const uint32_t TELEMETRY_INTERVAL_MS = 5000;
+static const uint32_t SCHEDULE_POLL_INTERVAL_MS = 30000;
 
 // Retry behavior if desired != actual
 static const uint32_t RETRY_COOLDOWN_MS = 10000;
@@ -64,8 +64,6 @@ int cachedScheduleVersion = -1;
 bool scheduleParsed = false;
 struct ScheduleSession {
   int64_t start_epoch;
-  int duration_min;
-  int preheat_min;
   bool enabled;
 };
 static const int MAX_SESSIONS = 20;
@@ -85,7 +83,7 @@ static uint32_t bootMs = 0;
 #define WARMUP_MS 15000
 
 // Minimum gap between any two HTTP requests (HTTPS needs recovery time)
-#define HTTP_COOLDOWN_MS 2000
+#define HTTP_COOLDOWN_MS 1500
 static uint32_t lastHttpMs = 0;
 
 // Max HTTP response size (prevents heap exhaustion from HTML error pages)
@@ -154,8 +152,8 @@ void syncTimeFromNtp() {
   }
 }
 
-// Returns true if current time is in "on" window: [start - preheat, start] or [start - preheat, start + duration].
-// duration_min == 0 means no auto-off: window is [preheatStart, start + 24h) so we only turn on, never off from schedule.
+// Returns true if current time is in "on" window: [start_time, start_time + 24h).
+// Turn on at exact start time; no preheat, no duration. User/sauna controller turns off.
 bool scheduleDerivedDesiredOn() {
   int64_t now = nowEpochUtc();
   if (now <= 0) return false;
@@ -163,11 +161,8 @@ bool scheduleDerivedDesiredOn() {
   for (int i = 0; i < scheduleSessionCount; i++) {
     const ScheduleSession& s = scheduleSessions[i];
     if (!s.enabled) continue;
-    int64_t preheatStart = s.start_epoch - (int64_t)s.preheat_min * 60;
-    int64_t end = (s.duration_min > 0)
-      ? (s.start_epoch + (int64_t)s.duration_min * 60)
-      : (s.start_epoch + (int64_t)24 * 3600);
-    if (now >= preheatStart && now <= end)
+    int64_t end = s.start_epoch + (int64_t)24 * 3600;
+    if (now >= s.start_epoch && now <= end)
       return true;
   }
   return false;
@@ -190,8 +185,6 @@ void loadScheduleFromPrefs() {
     JsonObject o = v.as<JsonObject>();
     ScheduleSession& s = scheduleSessions[scheduleSessionCount++];
     s.start_epoch = o["start_time_epoch_utc"] | 0;
-    s.duration_min = o["duration_min"] | 0;
-    s.preheat_min = o["preheat_min"] | 30;
     s.enabled = (o["enabled"] | 1) != 0;
   }
   scheduleParsed = true;
@@ -263,6 +256,12 @@ static void waitHttpCooldown() {
   }
 }
 
+// Skip HTTP if heap critically low (prevents crash during SSL)
+static bool heapOkForHttps() {
+  if (!useHttps()) return true;
+  return ESP.getFreeHeap() > 20000;
+}
+
 // GET JSON into shared jsonBuf. Caller must use jsonBuf before next HTTP call.
 // For HTTPS: limits response size to avoid heap exhaustion from HTML error pages.
 bool httpGetJson(const String& url, const char* bearerToken) {
@@ -270,6 +269,7 @@ bool httpGetJson(const String& url, const char* bearerToken) {
   String body;
 
   if (useHttps()) {
+    if (!heapOkForHttps()) { delay(500); yield(); return false; }
     waitHttpCooldown();
     WiFiClientSecure client;
     client.setInsecure();  // accept Let's Encrypt / CA-signed certs
@@ -327,6 +327,7 @@ bool httpPostJson(const String& url, const char* bearerToken) {
   int code;
 
   if (useHttps()) {
+    if (!heapOkForHttps()) { delay(500); yield(); return false; }
     waitHttpCooldown();
     WiFiClientSecure client;
     client.setInsecure();

@@ -2,7 +2,7 @@
 
 ## Overview
 
-**sauna_control** retrofits an existing sauna with wireless on/off control. An ESP32 polls a FastAPI server for desired state, drives relays to match, and posts telemetry. A web UI lets users toggle the sauna or add scheduled sessions. Schedules are cached on the device so it can turn the sauna on at the scheduled preheat time even when WiFi is down.
+**sauna_control** retrofits an existing sauna with wireless on/off control. An ESP32 polls a FastAPI server for desired state, drives relays to match, and posts telemetry. A web UI lets users toggle the sauna or add scheduled sessions (date, time). Schedules are cached on the device so it can turn the sauna on at the scheduled time even when WiFi is down.
 
 ## Components
 
@@ -38,8 +38,9 @@ Tokens must match between server `.env` and firmware `secrets.h` (device token).
 
 ## Schedule semantics
 
-- **Session**: `start_time_utc` (ISO), `preheat_min` (default 30), `duration_min` (0 = no auto-off). No duration field in UI; sauna controller or user turns off.
-- **Device behavior**: Turn ON at `start_time - preheat_min`. No automatic turn OFF from schedule.
+- **Session**: `start_time_utc` (ISO) + `enabled`. No preheat, duration, or notes. UI shows date and time only.
+- **Device behavior**: Turn ON at `start_time`. No automatic turn OFF from schedule; user or sauna controller turns off.
+- **Auto-remove**: Sessions disappear from the UI 2+ minutes after their start time (executed).
 - **Offline**: Device caches schedule in NVS; uses NTP-synced time (or millis delta during outage) to run schedule when WiFi is down.
 - **Reconciliation**: When online, server desired is authoritative; if a schedule session is active, device keeps ON even if server says OFF to avoid oscillation.
 
@@ -50,5 +51,4 @@ Tokens must match between server `.env` and firmware `secrets.h` (device token).
 
 ## Branches
 
-- **main**: Stable/prototype version.
-- **On-Scheduling**: Schedule feature (calendar, preheat, offline cache, NTP). Use for new deploys.
+- **main**: Stable (toggle + telemetry + schedule). Deploy from main.

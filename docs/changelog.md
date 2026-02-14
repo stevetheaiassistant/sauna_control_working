@@ -1,16 +1,15 @@
 # Changelog
 
-## On-Scheduling branch (current)
+## main (stable – Feb 2026)
 
-- **Schedule feature**: Calendar UI (date, time, preheat, note); device caches schedule in NVS; runs schedule offline; NTP sync.
-- **No duration**: Removed duration field; sauna controller or user turns off.
-- **Backend**: `schedule_sessions`, `schedule_meta` tables; device/app schedule endpoints; telemetry `time_synced`, `epoch_utc`, `schedule_version`.
-- **Deploy**: Ubuntu VPS guide with systemd, cloud firewall (IONOS), PAT/SSH for clone.
-- **Docs**: spec, architecture, deploy-ubuntu, schedule-test-plan, git-push-from-cursor.
+- **Schedule**: Date and time only. No preheat, duration, or notes. Sessions auto-remove from UI 2+ minutes after start.
+- **Poll intervals**: 3s desired, 5s telemetry, 30s schedule (stable for HTTPS).
+- **Stability**: `heapOkForHttps()` guard, 4KB response limit, 15s boot warmup, `platform.local.txt` for loop stack size.
+- **Deploy**: scp `backend_ui` to VPS + `systemctl restart sauna`. Production: `https://sauna1.wilsondesignllc.com`.
+- **Backend**: `delete_past_schedule_sessions()` on schedule fetch; schedule version bumped when sessions removed.
 
-## main (prototype)
+## Previous (On-Scheduling)
 
-- FastAPI backend, SQLite, device desired/telemetry, app state/desired.
-- Embedded web UI (toggle, temp, power/heat status).
-- ESP32 firmware: poll desired, enforce via relays, post telemetry, Preferences for last applied version.
-- GPIO pinout, secrets in `secrets.h` / `.env`, README.
+- Schedule feature: calendar UI, device NVS cache, offline run, NTP sync.
+- No duration: sauna controller or user turns off.
+- Backend: `schedule_sessions`, `schedule_meta` tables; device/app schedule endpoints.
