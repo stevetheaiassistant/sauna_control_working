@@ -1,6 +1,8 @@
 # sauna_control
 Web app and hardware to retrofit to existing sauna for wireless power on/off control.
 
+**Branches:** `main` = prototype (toggle + telemetry). `On-Scheduling` = schedule feature (calendar, preheat, offline). Use `On-Scheduling` for new deploys.
+
 **How it works:** The ESP32 polls the API for “desired” on/off, drives relays to match, and posts telemetry (temp, power/heat). The web UI lets you toggle the sauna or add **scheduled sessions** (date, time, preheat). When online, the server is the source of truth; when WiFi is down, the device uses its cached schedule so it can still turn the sauna on at the scheduled preheat time.
 
 ## Prerequisites
@@ -13,8 +15,8 @@ Web app and hardware to retrofit to existing sauna for wireless power on/off con
 sauna_control/
 ├── backend_ui/                    # FastAPI server + embedded UI (server.py, .env.example, requirements.txt)
 ├── firmware/Sauna_Control_ESP32/  # ESP32 sketch (.ino) + secrets.h.example
-├── docs/                          # spec, architecture, deploy
-└── ops/                           # deploy notes
+├── docs/                          # spec, architecture, deploy, test plan, git-push
+└── ops/                           # deploy notes, local-credentials (gitignored)
 ```
 
 ## Backend (API + UI)
@@ -62,3 +64,7 @@ Outputs drive relays (e.g. optocoupler/relay boards); pulse length is 200 ms. Po
 | **Schedule not syncing** | Device polls schedule every 60 s when online. Check Serial for “Schedule synced”; ensure NTP sync (“NTP sync OK”) so time is correct. |
 
 More detail: [docs/spec.md](docs/spec.md), [docs/architecture.md](docs/architecture.md).
+
+## Documentation
+
+Full doc index: [docs/README.md](docs/README.md). Key docs: [spec](docs/spec.md), [architecture](docs/architecture.md), [deploy-ubuntu](docs/deploy-ubuntu.md), [schedule-test-plan](docs/schedule-test-plan.md), [git-push-from-cursor](docs/git-push-from-cursor.md).

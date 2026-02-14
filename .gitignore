@@ -3,6 +3,8 @@
 *.env.local
 firmware/secrets.h
 **/secrets.h
+ops/local-credentials
+ops/credentials.local
 
 # Backend
 sauna.db

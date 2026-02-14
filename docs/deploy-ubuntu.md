@@ -29,6 +29,26 @@ cd backend_ui
 
 This clones the **On-Scheduling** branch (schedule + UI, no duration). The app runs from the `backend_ui` directory (where `server.py` and `requirements.txt` live).
 
+**If Git asks for username/password:** GitHub no longer accepts account passwords for HTTPS. Use one of these:
+
+- **Personal Access Token (PAT)**  
+  1. On GitHub: **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → **Generate new token**.  
+  2. Give it the **repo** scope, generate, and copy the token.  
+  3. When the VPS prompts for password, paste the **token** (not your GitHub password).  
+  Username can stay `stevetheaiassistant` (or your GitHub username).
+
+- **Clone over SSH (no prompt)**  
+  On the VPS, create an SSH key, add the public key to GitHub (or as a deploy key for this repo), then clone with:
+
+  ```bash
+  cd /opt/sauna
+  git clone -b On-Scheduling git@github.com:stevetheaiassistant/sauna_control.git .
+  cd backend_ui
+  ```
+
+- **Make the repo public**  
+  If the repo is public, `git clone` over HTTPS usually does not ask for credentials. You can make it public in **Settings** → **General** → **Danger Zone** → **Change repository visibility**, then run the clone again.
+
 **Option B – Copy only backend_ui from your machine:**
 
 On your Mac, from the project directory:
@@ -146,7 +166,15 @@ sudo ufw enable   # if you haven’t already
 
 Then the UI is at `http://YOUR_VPS_IP:8000/`.
 
-## 8. Optional: HTTPS with a domain
+## 8. Cloud provider firewall (required for many VPS)
+
+If the site won't load from your browser even though the service is running, the **cloud provider's firewall** is likely blocking port 8000. UFW only controls the OS firewall; the provider has a separate firewall.
+
+**IONOS:** Server & Cloud → Network → Firewall Policies → select your server's firewall → edit incoming rules → add rule: TCP port 8000, source 0.0.0.0/0. Save.
+
+**Other providers:** DigitalOcean (Firewalls), AWS (Security Groups), Linode (Firewalls), Vultr (Firewall) — add inbound rule for TCP 8000.
+
+## 9. Optional: HTTPS with a domain
 
 If you have a domain (e.g. `sauna-test.yourdomain.com`) pointing at the VPS:
 
@@ -199,5 +227,6 @@ If you have a domain (e.g. `sauna-test.yourdomain.com`) pointing at the VPS:
 - [ ] `.env` created in `backend_ui/` from `.env.example` with `SAUNA_DEVICE_TOKEN` and `SAUNA_APP_TOKEN`
 - [ ] Test: `uvicorn server:app --host 0.0.0.0 --port 8000` and open UI in browser
 - [ ] systemd service installed and `systemctl status sauna` shows active
-- [ ] Firewall allows 8000 (or 80/443 if using Caddy)
+- [ ] UFW allows 8000 (`sudo ufw allow 8000/tcp`)
+- [ ] Cloud provider firewall (IONOS, AWS, etc.) allows inbound TCP 8000
 - [ ] ESP32 `secrets.h` has same `DEVICE_TOKEN` and `API_HOST` pointing to this VPS
