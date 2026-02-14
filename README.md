@@ -63,6 +63,8 @@ Outputs drive relays (e.g. optocoupler/relay boards); pulse length is 200 ms. Po
 | **Desired never applies** | Power/heat input wiring or logic; device only acts when desired ≠ actual and retries every 10 s. |
 | **Schedule not syncing** | Device polls schedule every 60 s when online. Check Serial for “Schedule synced”; ensure NTP sync (“NTP sync OK”) so time is correct. |
 
+| **ESP32 crashes / freezes** | HTTPS is memory-heavy. Arduino IDE: Tools → Arduino ESP32 Configuration → Loop task stack size → set to 8192. Ensure strong WiFi. |
+
 More detail: [docs/spec.md](docs/spec.md), [docs/architecture.md](docs/architecture.md).
 
 ## Documentation

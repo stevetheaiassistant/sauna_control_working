@@ -11,7 +11,7 @@
 #include "secrets.h"
 static const char* wifi_ssid     = SECRET_WIFI_SSID;
 static const char* wifi_pass     = SECRET_WIFI_PASS;
-static const char* api_host      = SECRET_API_HOST;
+static const char* api_host      = SECRET_API_HOST;  // e.g. "sauna1.wilsondesignllc.com" (HTTPS) or "IP:8000" (HTTP)
 static const char* device_id     = SECRET_DEVICE_ID;
 static const char* device_token  = SECRET_DEVICE_TOKEN;
 
@@ -80,6 +80,17 @@ bool timeSynced = false;
 uint32_t timeSyncedAtMs = 0;
 int64_t epochAtSync = 0;
 
+// Boot warmup: no HTTP for 15s after boot (WiFi/SSL stack needs time to stabilize)
+static uint32_t bootMs = 0;
+#define WARMUP_MS 15000
+
+// Minimum gap between any two HTTP requests (HTTPS needs recovery time)
+#define HTTP_COOLDOWN_MS 2000
+static uint32_t lastHttpMs = 0;
+
+// Max HTTP response size (prevents heap exhaustion from HTML error pages)
+#define MAX_HTTP_BODY 4096
+
 // -------------------- Helpers --------------------
 // Use HTTPS when API_HOST has no port (e.g. domain); use HTTP when API_HOST is "IP:8000"
 static bool useHttps() {
@@ -100,7 +111,7 @@ bool readHeatIn() {
 
 void pulsePin(uint8_t pin, uint32_t ms) {
   digitalWrite(pin, HIGH);
-  delay(ms);
+  for (uint32_t t = millis(); millis() - t < ms; ) { yield(); delay(20); }
   digitalWrite(pin, LOW);
 }
 
@@ -124,17 +135,20 @@ void syncTimeFromNtp() {
   Serial.print("NTP waiting...");
   time_t now = time(nullptr);
   int retries = 0;
-  while (now < 1000000000 && retries++ < 40) {   // up to 8 seconds
+  while (now < 1000000000 && retries++ < 25) {   // up to 5 seconds (was 8)
     delay(200);
+    yield();
     now = time(nullptr);
   }
   if (now >= 1000000000) {
     timeSynced = true;
     timeSyncedAtMs = millis();
     epochAtSync = (int64_t)now;
+    Serial.println(" OK");
+    yield();
+    // Defer NVS writes to avoid crash during sync - do after a settle delay
     prefs.putULong("syncMs", timeSyncedAtMs);
     prefs.putLong("epoch", epochAtSync);
-    Serial.println(" OK");
   } else {
     Serial.println(" failed (will retry)");
   }
@@ -184,8 +198,10 @@ void loadScheduleFromPrefs() {
 }
 
 void saveScheduleToPrefs(int version, const String& json) {
+  yield();  // feed watchdog before blocking NVS write
   prefs.putInt("schedVer", version);
   prefs.putString("schedJson", json);
+  yield();  // recover after NVS write
   cachedScheduleVersion = version;
   loadScheduleFromPrefs();
 }
@@ -194,24 +210,33 @@ void ensureWiFi() {
   static bool wifiStarted = false;
   static uint32_t wifiStartMs = 0;
   static bool printedConnected = false;
+  static uint32_t wifiConnectedAtMs = 0;  // when we first saw connected (for deferring NTP)
   static uint32_t lastNtpRetryMs = 0;
+  static uint32_t wifiDownSince = 0;  // debounce: only reset printedConnected after 5s down
 
   if (WiFi.status() == WL_CONNECTED) {
+    wifiDownSince = 0;
     if (!printedConnected) {
       printedConnected = true;
-      Serial.println("WiFi connected!");
-      syncTimeFromNtp();
+      wifiConnectedAtMs = millis();  // defer NTP - don't run immediately
+      // Don't print here - print only when we actually run NTP (avoids spam if crash-looping)
     }
-    // Retry NTP every 15s if still not synced
-    if (!timeSynced && (millis() - lastNtpRetryMs > 15000)) {
+    // Run NTP 3s after first connect (let WiFi stack stabilize) or retry every 90s if failed
+    uint32_t sinceConnect = millis() - wifiConnectedAtMs;
+    bool firstRun = (lastNtpRetryMs == 0);
+    bool retryDue = (!firstRun && (millis() - lastNtpRetryMs > 90000));
+    if (!timeSynced && sinceConnect >= 3000 && (firstRun || retryDue)) {
       lastNtpRetryMs = millis();
-      Serial.println("Retrying NTP...");
+      if (firstRun) Serial.println("WiFi connected, syncing NTP...");
+      else Serial.println("Retrying NTP...");
       syncTimeFromNtp();
     }
     return;
   }
 
-  printedConnected = false;
+  // Only reset printedConnected after WiFi has been down for 5s (debounce flapping)
+  if (wifiDownSince == 0) wifiDownSince = millis();
+  if (millis() - wifiDownSince > 5000) printedConnected = false;
 
   if (!wifiStarted) {
     WiFi.mode(WIFI_STA);
@@ -229,23 +254,53 @@ void ensureWiFi() {
   }
 }
 
+// Wait for HTTP cooldown (HTTPS needs recovery time between requests)
+static void waitHttpCooldown() {
+  if (!useHttps()) return;
+  while (millis() - lastHttpMs < HTTP_COOLDOWN_MS) {
+    delay(100);
+    yield();
+  }
+}
+
 // GET JSON into shared jsonBuf. Caller must use jsonBuf before next HTTP call.
+// For HTTPS: limits response size to avoid heap exhaustion from HTML error pages.
 bool httpGetJson(const String& url, const char* bearerToken) {
   int code;
   String body;
 
   if (useHttps()) {
+    waitHttpCooldown();
     WiFiClientSecure client;
     client.setInsecure();  // accept Let's Encrypt / CA-signed certs
     HTTPClient http;
-    http.setTimeout(5000);
+    http.setTimeout(8000);  // HTTPS handshake can be slow
     if (!http.begin(client, url)) return false;
     http.addHeader("Authorization", String("Bearer ") + bearerToken);
     code = http.GET();
     yield();
-    if (code <= 0) { http.end(); return false; }
-    body = http.getString();
+    if (code <= 0) { http.end(); lastHttpMs = millis(); delay(500); yield(); return false; }
+    // Limit response size to prevent heap exhaustion from large HTML/error pages
+    int len = http.getSize();
+    if (len > 0 && len > MAX_HTTP_BODY) { http.end(); lastHttpMs = millis(); return false; }
+    // Read with limit (getString() allocates full response; stream read avoids heap exhaustion)
+    body.reserve(MAX_HTTP_BODY);
+    body = "";
+    Stream& s = http.getStream();
+    char buf[128];
+    size_t total = 0;
+    while (total < (size_t)MAX_HTTP_BODY && s.available()) {
+      size_t toRead = (sizeof(buf) < (size_t)MAX_HTTP_BODY - total) ? sizeof(buf) : (size_t)MAX_HTTP_BODY - total;
+      size_t n = s.readBytes(buf, toRead);
+      if (n == 0) break;
+      total += n;
+      body.concat(buf, n);
+      yield();
+    }
     http.end();
+    lastHttpMs = millis();
+    delay(500);  // let WiFi/SSL stack settle
+    yield();
   } else {
     WiFiClient client;
     HTTPClient http;
@@ -265,33 +320,41 @@ bool httpGetJson(const String& url, const char* bearerToken) {
   return !err;
 }
 
-// POST jsonBuf contents as JSON.
+// POST jsonBuf contents as JSON. Logs HTTP code on failure for debug.
 bool httpPostJson(const String& url, const char* bearerToken) {
   String payload;
   serializeJson(jsonBuf, payload);
   int code;
 
   if (useHttps()) {
+    waitHttpCooldown();
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
-    http.setTimeout(5000);
-    if (!http.begin(client, url)) return false;
+    http.setTimeout(8000);  // HTTPS handshake can be slow
+    if (!http.begin(client, url)) { Serial.println("POST begin failed"); return false; }
     http.addHeader("Authorization", String("Bearer ") + bearerToken);
     http.addHeader("Content-Type", "application/json");
     code = http.POST(payload);
     http.end();
+    lastHttpMs = millis();
+    delay(500);  // let WiFi/SSL stack settle
+    yield();
   } else {
     WiFiClient client;
     HTTPClient http;
     http.setTimeout(5000);
-    if (!http.begin(client, url)) return false;
+    if (!http.begin(client, url)) { Serial.println("POST begin failed"); return false; }
     http.addHeader("Authorization", String("Bearer ") + bearerToken);
     http.addHeader("Content-Type", "application/json");
     code = http.POST(payload);
     http.end();
   }
   yield();
+  if (code < 200 || code >= 300) {
+    Serial.printf("POST failed: HTTP %d\n", code);
+    if (code < 0 && useHttps()) { lastHttpMs = millis(); delay(1000); }
+  }
   return (code >= 200 && code < 300);
 }
 
@@ -366,8 +429,11 @@ void syncScheduleIfNeeded() {
   int serverVer = jsonBuf["schedule_version"] | 0;
   if (serverVer <= cachedScheduleVersion) return;
 
+  if (!jsonBuf["sessions"].is<JsonArray>()) return;  // skip malformed response
   String outJson;
   serializeJson(jsonBuf["sessions"], outJson);
+  yield();
+
   saveScheduleToPrefs(serverVer, outJson);
   yield();
   Serial.println("Schedule synced");
@@ -385,6 +451,7 @@ void setupPins() {
 void setup() {
   Serial.begin(115200);
   delay(500);
+  bootMs = millis();
 
   setupPins();
   sensors.begin();
@@ -408,6 +475,13 @@ void loop() {
   uint32_t now = millis();
   bool wifiUp = (WiFi.status() == WL_CONNECTED);
 
+  // --- Warmup: no HTTP for 10s after boot (prevents crash on first HTTPS) ---
+  if (now - bootMs < WARMUP_MS) {
+    delay(100);
+    yield();
+    return;
+  }
+
   // --- Offline mode: schedule-only control ---
   if (!wifiUp) {
     bool desiredOn = scheduleDerivedDesiredOn();
@@ -424,7 +498,7 @@ void loop() {
   if (now - lastSchedulePollMs >= SCHEDULE_POLL_INTERVAL_MS) {
     lastSchedulePollMs = now;
     syncScheduleIfNeeded();
-    delay(200);  // let stack settle after NVS write
+    delay(500);  // let stack settle after NVS write (was 200)
     yield();
     return;
   }
@@ -489,9 +563,11 @@ void loop() {
 
   if (now - lastAttemptMs >= RETRY_COOLDOWN_MS) {
     Serial.printf("[ENFORCE] attempt %d/%d\n", enforceRetries + 1, MAX_ENFORCE_RETRIES);
+    yield();
     enforceDesired(desiredOn);
     lastAttemptMs = now;
     enforceRetries++;
+    delay(useHttps() ? 800 : 500);  // settle after relay
     if (readPowerIn() == desiredOn) {
       lastAppliedVersion = desiredVersion;
       prefs.putInt("lastVer", lastAppliedVersion);

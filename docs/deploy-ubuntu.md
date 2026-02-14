@@ -176,7 +176,7 @@ If the site won't load from your browser even though the service is running, the
 
 ## 9. HTTPS with a domain (recommended for production)
 
-You need a domain name (e.g. `sauna.yourdomain.com`) with a DNS A record pointing to your VPS IP. Caddy will obtain a free Let's Encrypt certificate automatically.
+You need a domain name (e.g. `sauna1.wilsondesignllc.com`) with a DNS A record pointing to your VPS IP. Caddy will obtain a free Let's Encrypt certificate automatically.
 
 ### 9.1 Install Caddy
 
@@ -194,10 +194,10 @@ sudo apt install -y caddy
 sudo nano /etc/caddy/Caddyfile
 ```
 
-Replace `sauna.yourdomain.com` with your actual domain:
+Replace with your actual domain:
 
 ```
-sauna.yourdomain.com {
+sauna1.wilsondesignllc.com {
     reverse_proxy localhost:8000
 }
 ```
@@ -223,14 +223,14 @@ Also open ports 80 and 443 in your **cloud provider firewall** (IONOS, etc.).
 In `secrets.h`, set `API_HOST` to your domain **without** a port (HTTPS uses 443 by default):
 
 ```c
-#define SECRET_API_HOST        "sauna.yourdomain.com"
+#define SECRET_API_HOST        "sauna1.wilsondesignllc.com"
 ```
 
 The firmware uses HTTPS when `API_HOST` has no port (e.g. domain only). For plain HTTP during development, use `IP:8000`.
 
 ### 9.5 Access the UI
 
-- **HTTPS**: `https://sauna.yourdomain.com/`
+- **HTTPS**: `https://sauna1.wilsondesignllc.com/`
 - The sauna app and ESP32 will communicate over encrypted HTTPS.
 
 ---
