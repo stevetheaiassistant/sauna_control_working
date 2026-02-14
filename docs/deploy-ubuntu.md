@@ -248,9 +248,11 @@ Replace `YOUR_VPS_IP` with your VPS IP (e.g. `74.208.133.101`). This copies the 
 
 ---
 
-## 11. ESP32 stability (platform.local.txt)
+## 11. ESP32 stability
 
-If the ESP32 crashes or freezes under HTTPS load, increase the main loop stack size. Create this file in your Arduino ESP32 hardware folder:
+**Power supply**: Use a dedicated 5V 2A+ supply instead of USB from a computer. USB can brown out under WiFi+HTTPS+relay load and cause crashes or freezes.
+
+**Stack size (platform.local.txt)**: If the ESP32 still crashes or freezes under HTTPS load, increase the main loop stack size. Create this file in your Arduino ESP32 hardware folder:
 
 **Path:** `~/Arduino/hardware/espressif/esp32/platform.local.txt` (or equivalent for PlatformIO)
 

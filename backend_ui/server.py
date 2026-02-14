@@ -5,8 +5,11 @@ from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 DB_PATH = os.environ.get("SAUNA_DB", "sauna.db")
@@ -146,6 +149,8 @@ app.add_middleware(
 )
 
 init_db()
+
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 
 # --- Models ---
@@ -501,86 +506,91 @@ UI_HTML = f"""
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Sauna Control</title>
   <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      margin: 0; padding: 24px; background: #0b0f14; color: #e8eef6; }}
-    .card {{ max-width: 560px; margin: 0 auto; background: #111826; border: 1px solid #1c2a3d;
-      border-radius: 16px; padding: 18px; box-shadow: 0 8px 30px rgba(0,0,0,.35); }}
-    .row {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin: 14px 0; }}
-    .big {{ width: 100%; font-size: 20px; padding: 14px 16px; border-radius: 14px; border: 1px solid #2a3b54;
-      background: #182235; color: #e8eef6; cursor: pointer; }}
-    .big:active {{ transform: translateY(1px); }}
-    .pill {{ display:inline-flex; align-items:center; gap:10px; padding: 10px 12px; border-radius: 999px;
-      border: 1px solid #2a3b54; background: #0d1422; font-weight: 600; }}
-    .dot {{ width: 14px; height: 14px; border-radius: 50%; background: #6b7280; box-shadow: 0 0 0 3px rgba(255,255,255,.04) inset; }}
-    .dot.green {{ background: #22c55e; }} .dot.red {{ background: #ef4444; }}
-    .muted {{ color: #9fb2cc; font-size: 13px; }}
-    .temp {{ font-size: 44px; font-weight: 800; letter-spacing: -1px; }}
-    .grid {{ display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
-    input, select {{ width: 100%; font-size: 14px; padding: 10px 12px; border-radius: 12px;
-      border: 1px solid #2a3b54; background: #0d1422; color: #e8eef6; box-sizing: border-box; }}
-    .btn {{ font-size: 14px; padding: 10px 12px; border-radius: 12px; border: 1px solid #2a3b54;
-      background: #182235; color: #e8eef6; cursor: pointer; }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      margin: 0; padding: 0; background: #f5f5f5; color: #2d3748; line-height: 1.5; }}
+    .header {{ width: 100%; height: 220px; background: url("/static/images/header.jpeg") center/cover no-repeat; }}
+    .content {{ max-width: 900px; margin: -40px auto 40px; padding: 0 20px; display: grid; grid-template-columns: 1fr 1.8fr; gap: 24px; }}
+    @media (max-width: 700px) {{ .content {{ grid-template-columns: 1fr; margin-top: -20px; }} }}
+    .card {{ background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,.08); }}
+    .sidebar {{ display: flex; flex-direction: column; align-items: center; text-align: center; }}
+    .logo {{ width: 100px; height: 100px; border-radius: 50%; object-fit: cover; margin-bottom: 12px; border: 3px solid #fff; box-shadow: 0 4px 12px rgba(0,0,0,.15); }}
+    .title {{ font-size: 22px; font-weight: 700; margin: 0 0 4px 0; color: #1a202c; }}
+    .muted {{ color: #718096; font-size: 13px; margin-bottom: 16px; }}
+    .temp {{ font-size: 36px; font-weight: 800; letter-spacing: -1px; color: #2d3748; margin: 8px 0; }}
+    .pills {{ display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin: 12px 0; }}
+    .pill {{ display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px;
+      border: 1px solid #e2e8f0; background: #f7fafc; font-weight: 500; font-size: 14px; }}
+    .dot {{ width: 10px; height: 10px; border-radius: 50%; background: #a0aec0; }}
+    .dot.green {{ background: #38a169; }} .dot.red {{ background: #e53e3e; }}
+    .big {{ width: 100%; font-size: 16px; padding: 14px 20px; border-radius: 10px; border: none;
+      background: #e07c5a; color: #fff; cursor: pointer; font-weight: 600; margin-top: 8px; }}
+    .big:hover {{ background: #d46a48; }} .big:active {{ transform: translateY(1px); }}
+    .row {{ display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 12px 0; flex-wrap: wrap; }}
+    .section {{ margin-top: 24px; padding-top: 20px; border-top: 1px solid #e2e8f0; }}
+    .section h3 {{ margin: 0 0 12px 0; font-size: 18px; font-weight: 700; color: #1a202c;
+      padding-bottom: 8px; border-bottom: 3px solid #e07c5a; display: inline-block; }}
+    .form-row {{ margin: 10px 0; }}
+    .form-row label {{ display: block; margin-bottom: 4px; font-size: 13px; color: #718096; }}
+    input, select {{ width: 100%; font-size: 14px; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid #e2e8f0; background: #fff; color: #2d3748; }}
+    .btn {{ font-size: 14px; padding: 10px 16px; border-radius: 8px; border: 1px solid #e2e8f0;
+      background: #fff; color: #2d3748; cursor: pointer; font-weight: 500; }}
+    .btn:hover {{ background: #f7fafc; border-color: #cbd5e0; }}
+    .btn-accent {{ background: #e07c5a; color: #fff; border-color: #e07c5a; }}
+    .btn-accent:hover {{ background: #d46a48; border-color: #d46a48; }}
     .schedule-list {{ list-style: none; padding: 0; margin: 12px 0; }}
-    .schedule-list li {{ padding: 10px 12px; margin: 6px 0; background: #0d1422; border-radius: 12px;
-      border: 1px solid #2a3b54; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }}
-    .schedule-list .actions {{ display: flex; gap: 6px; }}
-    .section {{ margin-top: 20px; padding-top: 16px; border-top: 1px solid #1c2a3d; }}
-    .section h3 {{ margin: 0 0 10px 0; font-size: 16px; }}
-    .form-row {{ margin: 8px 0; }}
-    .form-row label {{ display: block; margin-bottom: 4px; font-size: 12px; color: #9fb2cc; }}
+    .schedule-list li {{ padding: 12px 14px; margin: 8px 0; background: #f7fafc; border-radius: 8px;
+      border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }}
+    .schedule-list .actions {{ display: flex; gap: 8px; }}
+    .auth-grid {{ display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }}
+    @media (max-width: 500px) {{ .auth-grid {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="row">
-      <div>
-        <div style="font-size:18px; font-weight:800;">Sauna</div>
-        <div class="muted">Device: {DEVICE_ID}</div>
-      </div>
+  <div class="header"></div>
+  <div class="content">
+    <div class="card sidebar">
+      <img src="/static/images/logo.png" alt="Logo" class="logo"/>
+      <h1 class="title">Sauna Control</h1>
       <div class="muted" id="lastUpdate">–</div>
-    </div>
-
-    <div class="row">
-      <div>
-        <div class="muted">Temperature</div>
-        <div class="temp" id="temp">--.-°F</div>
+      <div class="temp" id="temp">--.-°F</div>
+      <div class="muted">Temperature</div>
+      <div class="pills">
+        <div class="pill"><span class="dot" id="powerDot"></span> Power</div>
+        <div class="pill"><span class="dot" id="heatDot"></span> Heat</div>
       </div>
-    </div>
-    <div class="grid">
-      <div class="pill"><span class="dot" id="powerDot"></span> Power On</div>
-      <div class="pill"><span class="dot" id="heatDot"></span> Heat On</div>
-    </div>
-    <div class="row" style="margin-top:16px;">
       <button class="big" id="toggleBtn">Toggle Sauna</button>
-    </div>
-    <div class="row">
-      <div class="muted">Desired: <span id="desiredText">–</span></div>
-      <div class="muted">Applied: <span id="appliedText">–</span></div>
-    </div>
-
-    <div class="section">
-      <h3>Schedule</h3>
-      <ul class="schedule-list" id="scheduleList"></ul>
-      <div class="form-row">
-        <label>Date</label>
-        <input type="date" id="schedDate"/>
-      </div>
-      <div class="form-row">
-        <label>Time (local)</label>
-        <input type="time" id="schedTime"/>
-      </div>
-      <div class="row">
-        <button class="btn" id="schedAddBtn">Add session</button>
+      <div class="row" style="margin-top:12px; justify-content:center;">
+        <span class="muted">Desired: <span id="desiredText">–</span></span>
+        <span class="muted">Applied: <span id="appliedText">–</span></span>
       </div>
     </div>
-
-    <div style="margin-top:14px;">
-      <div class="muted" style="margin-bottom:8px;">Auth</div>
-      <div class="grid">
-        <input id="token" placeholder="APP_TOKEN" type="password"/>
-        <button class="btn" id="saveBtn">Save</button>
+    <div class="card">
+      <div class="section">
+        <h3>Schedule</h3>
+        <ul class="schedule-list" id="scheduleList"></ul>
+        <div class="form-row">
+          <label>Date</label>
+          <input type="date" id="schedDate"/>
+        </div>
+        <div class="form-row">
+          <label>Time (local)</label>
+          <input type="time" id="schedTime"/>
+        </div>
+        <button class="btn btn-accent" id="schedAddBtn">Add session</button>
       </div>
-      <div class="muted" style="margin-top:8px;">Tip: store token in your iPhone password manager, paste once, hit Save.</div>
+      <div class="section">
+        <h3>Auth</h3>
+        <div class="auth-grid">
+          <div class="form-row" style="margin:0;">
+            <label>APP_TOKEN</label>
+            <input id="token" placeholder="Paste token" type="password"/>
+          </div>
+          <button class="btn btn-accent" id="saveBtn">Save</button>
+        </div>
+        <div class="muted" style="margin-top:8px;">Store token in your password manager, paste once, hit Save.</div>
+      </div>
     </div>
   </div>
 
@@ -627,19 +637,19 @@ async function fetchState() {{
   const data = await res.json();
   const telem = data.telemetry;
   const desired = data.desired;
-  document.getElementById("desiredText").textContent = desired.sauna_on ? `ON (v${{desired.version}})` : `OFF (v${{desired.version}})`;
+  document.getElementById("desiredText").textContent = desired.sauna_on ? "ON" : "OFF";
   if (telem) {{
     const tf = (telem.temp_f == null) ? "--.-" : telem.temp_f.toFixed(1);
     document.getElementById("temp").textContent = tf + "°F";
     setDot(document.getElementById("powerDot"), telem.power_in);
     setDot(document.getElementById("heatDot"), telem.heat_in);
-    document.getElementById("appliedText").textContent = (telem.last_desired_version_applied == null) ? "-" : `v${{telem.last_desired_version_applied}}`;
+    document.getElementById("appliedText").textContent = telem.power_in === true ? "ON" : telem.power_in === false ? "OFF" : "–";
     document.getElementById("lastUpdate").textContent = telem.updated_at ? new Date(telem.updated_at).toLocaleString() : "";
   }} else {{
     document.getElementById("temp").textContent = "--.-°F";
     setDot(document.getElementById("powerDot"), null);
     setDot(document.getElementById("heatDot"), null);
-    document.getElementById("appliedText").textContent = "-";
+    document.getElementById("appliedText").textContent = "–";
     document.getElementById("lastUpdate").textContent = "No telemetry yet";
   }}
 }}

@@ -64,7 +64,7 @@ Outputs drive relays (e.g. optocoupler/relay boards); pulse length is 200 ms. Po
 | **Desired never applies** | Power/heat input wiring or logic; device only acts when desired ≠ actual and retries every 10 s. |
 | **Schedule not syncing** | Device polls schedule every 30 s when online. Check Serial for “Schedule synced”; ensure NTP sync (“NTP sync OK”) so time is correct. |
 
-| **ESP32 crashes / freezes** | Polling too fast causes HTTPS overload. Stable config: 3s desired, 5s telemetry, 30s schedule. Add `platform.local.txt` for loop stack size (see [deploy-ubuntu](docs/deploy-ubuntu.md)). Ensure strong WiFi. |
+| **ESP32 crashes / freezes** | **Power**: Use a dedicated 5V 2A+ supply instead of USB from a computer—USB can brown out under WiFi+HTTPS+relay load. **Software**: Polling too fast causes HTTPS overload; stable config: 3s desired, 5s telemetry, 30s schedule. Add `platform.local.txt` for loop stack size (see [deploy-ubuntu](docs/deploy-ubuntu.md)). Ensure strong WiFi. |
 
 More detail: [docs/spec.md](docs/spec.md), [docs/architecture.md](docs/architecture.md).
 
