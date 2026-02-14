@@ -9,14 +9,15 @@
 
 // -------------------- User Config (secrets in secrets.h, not in repo) --------------------
 #include "secrets.h"
-static const char* WIFI_SSID = WIFI_SSID;
-static const char* WIFI_PASS = WIFI_PASS;
-static const char* API_HOST = API_HOST;
-static const char* DEVICE_ID = DEVICE_ID;
-static const char* DEVICE_TOKEN = DEVICE_TOKEN;
+static const char* wifi_ssid     = SECRET_WIFI_SSID;
+static const char* wifi_pass     = SECRET_WIFI_PASS;
+static const char* api_host      = SECRET_API_HOST;
+static const char* device_id     = SECRET_DEVICE_ID;
+static const char* device_token  = SECRET_DEVICE_TOKEN;
 
 // Polling
-static const uint32_t POLL_INTERVAL_MS = 3000;
+static const uint32_t POLL_INTERVAL_MS = 5000;
+static const uint32_t TELEMETRY_INTERVAL_MS = 10000;
 static const uint32_t SCHEDULE_POLL_INTERVAL_MS = 60000;
 
 // Retry behavior if desired != actual
@@ -49,10 +50,14 @@ OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature sensors(&oneWire);
 
 uint32_t lastPollMs = 0;
+uint32_t lastTelemetryMs = 0;
 uint32_t lastSchedulePollMs = 0;
 int lastAppliedVersion = 0;
 int pendingVersion = -1;
 uint32_t lastAttemptMs = 0;
+int enforceRetries = 0;
+static const int MAX_ENFORCE_RETRIES = 3;
+bool scheduleDesiredPosted = false;  // avoid spamming POST desired
 
 // Schedule cache (NVS)
 int cachedScheduleVersion = -1;
@@ -67,14 +72,22 @@ static const int MAX_SESSIONS = 20;
 ScheduleSession scheduleSessions[MAX_SESSIONS];
 int scheduleSessionCount = 0;
 
+// Shared JSON buffer -- allocated once, reused everywhere to avoid heap fragmentation.
+DynamicJsonDocument jsonBuf(2048);
+
 // Time sync for offline
 bool timeSynced = false;
 uint32_t timeSyncedAtMs = 0;
 int64_t epochAtSync = 0;
 
 // -------------------- Helpers --------------------
-String httpsUrl(const String& path) {
-  return String("https://") + API_HOST + path;
+// Use HTTPS when API_HOST has no port (e.g. domain); use HTTP when API_HOST is "IP:8000"
+static bool useHttps() {
+  return (strstr(api_host, ":8000") == nullptr);
+}
+
+String apiUrl(const String& path) {
+  return String(useHttps() ? "https://" : "http://") + api_host + path;
 }
 
 bool readPowerIn() {
@@ -108,9 +121,10 @@ int64_t nowEpochUtc() {
 
 void syncTimeFromNtp() {
   configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+  Serial.print("NTP waiting...");
   time_t now = time(nullptr);
   int retries = 0;
-  while (now < 1000000000 && retries++ < 10) {
+  while (now < 1000000000 && retries++ < 40) {   // up to 8 seconds
     delay(200);
     now = time(nullptr);
   }
@@ -120,9 +134,9 @@ void syncTimeFromNtp() {
     epochAtSync = (int64_t)now;
     prefs.putULong("syncMs", timeSyncedAtMs);
     prefs.putLong("epoch", epochAtSync);
-    Serial.println("NTP sync OK");
+    Serial.println(" OK");
   } else {
-    Serial.println("NTP sync failed (time not set)");
+    Serial.println(" failed (will retry)");
   }
 }
 
@@ -138,7 +152,7 @@ bool scheduleDerivedDesiredOn() {
     int64_t preheatStart = s.start_epoch - (int64_t)s.preheat_min * 60;
     int64_t end = (s.duration_min > 0)
       ? (s.start_epoch + (int64_t)s.duration_min * 60)
-      : (s.start_epoch + (int64_t)24 * 3600);  // 0 = no auto-off: keep "on" for 24h from start
+      : (s.start_epoch + (int64_t)24 * 3600);
     if (now >= preheatStart && now <= end)
       return true;
   }
@@ -151,11 +165,11 @@ void loadScheduleFromPrefs() {
   scheduleSessionCount = 0;
   scheduleParsed = false;
 
-  DynamicJsonDocument doc(2048);
-  DeserializationError err = deserializeJson(doc, json);
-  if (err || !doc.is<JsonArray>()) return;
+  jsonBuf.clear();
+  DeserializationError err = deserializeJson(jsonBuf, json);
+  if (err || !jsonBuf.is<JsonArray>()) return;
 
-  JsonArray arr = doc.as<JsonArray>();
+  JsonArray arr = jsonBuf.as<JsonArray>();
   for (JsonVariant v : arr) {
     if (scheduleSessionCount >= MAX_SESSIONS) break;
     if (!v.is<JsonObject>()) continue;
@@ -180,7 +194,7 @@ void ensureWiFi() {
   static bool wifiStarted = false;
   static uint32_t wifiStartMs = 0;
   static bool printedConnected = false;
-  static bool dnsChecked = false;
+  static uint32_t lastNtpRetryMs = 0;
 
   if (WiFi.status() == WL_CONNECTED) {
     if (!printedConnected) {
@@ -188,20 +202,20 @@ void ensureWiFi() {
       Serial.println("WiFi connected!");
       syncTimeFromNtp();
     }
-    if (!dnsChecked) {
-      dnsChecked = true;
-      IPAddress resolved;
-      WiFi.hostByName(API_HOST, resolved);
+    // Retry NTP every 15s if still not synced
+    if (!timeSynced && (millis() - lastNtpRetryMs > 15000)) {
+      lastNtpRetryMs = millis();
+      Serial.println("Retrying NTP...");
+      syncTimeFromNtp();
     }
     return;
   }
 
   printedConnected = false;
-  dnsChecked = false;
 
   if (!wifiStarted) {
     WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    WiFi.begin(wifi_ssid, wifi_pass);
     wifiStarted = true;
     wifiStartMs = millis();
     return;
@@ -215,39 +229,80 @@ void ensureWiFi() {
   }
 }
 
-bool httpGetJson(const String& url, const char* bearerToken, DynamicJsonDocument& outDoc) {
-  WiFiClientSecure client;
-  client.setInsecure();
+// GET JSON into shared jsonBuf. Caller must use jsonBuf before next HTTP call.
+bool httpGetJson(const String& url, const char* bearerToken) {
+  int code;
+  String body;
 
-  HTTPClient https;
-  if (!https.begin(client, url)) return false;
-  https.addHeader("Authorization", String("Bearer ") + bearerToken);
-
-  int code = https.GET();
-  if (code <= 0) {
-    https.end();
-    return false;
+  if (useHttps()) {
+    WiFiClientSecure client;
+    client.setInsecure();  // accept Let's Encrypt / CA-signed certs
+    HTTPClient http;
+    http.setTimeout(5000);
+    if (!http.begin(client, url)) return false;
+    http.addHeader("Authorization", String("Bearer ") + bearerToken);
+    code = http.GET();
+    yield();
+    if (code <= 0) { http.end(); return false; }
+    body = http.getString();
+    http.end();
+  } else {
+    WiFiClient client;
+    HTTPClient http;
+    http.setTimeout(5000);
+    if (!http.begin(client, url)) return false;
+    http.addHeader("Authorization", String("Bearer ") + bearerToken);
+    code = http.GET();
+    yield();
+    if (code <= 0) { http.end(); return false; }
+    body = http.getString();
+    http.end();
   }
-  String body = https.getString();
-  https.end();
+  yield();
 
-  DeserializationError err = deserializeJson(outDoc, body);
-  if (err) return false;
-  return true;
+  jsonBuf.clear();
+  DeserializationError err = deserializeJson(jsonBuf, body);
+  return !err;
 }
 
-bool httpPostJson(const String& url, const char* bearerToken, const JsonDocument& doc) {
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient https;
-  if (!https.begin(client, url)) return false;
-  https.addHeader("Authorization", String("Bearer ") + bearerToken);
-  https.addHeader("Content-Type", "application/json");
+// POST jsonBuf contents as JSON.
+bool httpPostJson(const String& url, const char* bearerToken) {
   String payload;
-  serializeJson(doc, payload);
-  int code = https.POST(payload);
-  https.end();
+  serializeJson(jsonBuf, payload);
+  int code;
+
+  if (useHttps()) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setTimeout(5000);
+    if (!http.begin(client, url)) return false;
+    http.addHeader("Authorization", String("Bearer ") + bearerToken);
+    http.addHeader("Content-Type", "application/json");
+    code = http.POST(payload);
+    http.end();
+  } else {
+    WiFiClient client;
+    HTTPClient http;
+    http.setTimeout(5000);
+    if (!http.begin(client, url)) return false;
+    http.addHeader("Authorization", String("Bearer ") + bearerToken);
+    http.addHeader("Content-Type", "application/json");
+    code = http.POST(payload);
+    http.end();
+  }
+  yield();
   return (code >= 200 && code < 300);
+}
+
+// Tell server to set desired state (used when schedule fires).
+bool postDesiredState(bool saunaOn) {
+  jsonBuf.clear();
+  jsonBuf["sauna_on"] = saunaOn;
+  String path = String("/v1/device/") + device_id + "/desired";
+  bool ok = httpPostJson(apiUrl(path), device_token);
+  Serial.println(ok ? "Schedule -> desired ON" : "Schedule POST failed");
+  return ok;
 }
 
 bool enforceDesired(bool desiredOn) {
@@ -256,7 +311,8 @@ bool enforceDesired(bool desiredOn) {
 
   if (desiredOn && !powerActual) {
     pulsePin(POWER_TOGGLE_OUT_PIN, PULSE_MS);
-    delay(START_DELAY_MS);
+    // Non-blocking wait: yield to avoid watchdog reset
+    for (uint32_t t = millis(); millis() - t < START_DELAY_MS; ) { yield(); delay(50); }
     if (readPowerIn())
       pulsePin(START_OUT_PIN, PULSE_MS);
     return true;
@@ -269,51 +325,52 @@ bool enforceDesired(bool desiredOn) {
 }
 
 void postTelemetry(int desiredVersion, bool desiredOn, bool timeSyncedVal, int64_t epochUtc, int schedVer) {
-  DynamicJsonDocument doc(512);
+  jsonBuf.clear();
 
   float tempF = readTempF();
   bool powerIn = readPowerIn();
   bool heatIn  = readHeatIn();
 
-  if (isnan(tempF)) doc["temp_f"] = nullptr;
-  else doc["temp_f"] = tempF;
+  if (isnan(tempF)) jsonBuf["temp_f"] = nullptr;
+  else jsonBuf["temp_f"] = tempF;
 
-  doc["power_in"] = powerIn;
-  doc["heat_in"]  = heatIn;
+  jsonBuf["power_in"] = powerIn;
+  jsonBuf["heat_in"]  = heatIn;
 
   if (WiFi.status() == WL_CONNECTED) {
-    doc["rssi"] = (int)WiFi.RSSI();
-    doc["ip"] = WiFi.localIP().toString();
+    jsonBuf["rssi"] = (int)WiFi.RSSI();
+    jsonBuf["ip"] = WiFi.localIP().toString();
   } else {
-    doc["rssi"] = nullptr;
-    doc["ip"] = nullptr;
+    jsonBuf["rssi"] = nullptr;
+    jsonBuf["ip"] = nullptr;
   }
 
-  doc["uptime_s"] = (int)(millis() / 1000);
-  doc["time_synced"] = timeSyncedVal;
-  if (epochUtc > 0) doc["epoch_utc"] = epochUtc;
-  doc["schedule_version"] = schedVer;
+  jsonBuf["uptime_s"] = (int)(millis() / 1000);
+  jsonBuf["time_synced"] = timeSyncedVal;
+  if (epochUtc > 0) jsonBuf["epoch_utc"] = epochUtc;
+  jsonBuf["schedule_version"] = schedVer;
 
-  if (powerIn == desiredOn) doc["last_desired_version_applied"] = desiredVersion;
-  else doc["last_desired_version_applied"] = lastAppliedVersion;
+  if (powerIn == desiredOn) jsonBuf["last_desired_version_applied"] = desiredVersion;
+  else jsonBuf["last_desired_version_applied"] = lastAppliedVersion;
 
-  String path = String("/v1/device/") + DEVICE_ID + "/telemetry";
-  httpPostJson(httpsUrl(path), DEVICE_TOKEN, doc);
+  String path = String("/v1/device/") + device_id + "/telemetry";
+  httpPostJson(apiUrl(path), device_token);
 }
 
 // Fetch schedule from server and update cache if version changed.
 void syncScheduleIfNeeded() {
-  DynamicJsonDocument doc(2048);
-  String path = String("/v1/device/") + DEVICE_ID + "/schedule";
-  if (!httpGetJson(httpsUrl(path), DEVICE_TOKEN, doc)) return;
+  String path = String("/v1/device/") + device_id + "/schedule";
+  if (!httpGetJson(apiUrl(path), device_token)) return;
+  yield();
 
-  int serverVer = doc["schedule_version"] | 0;
+  int serverVer = jsonBuf["schedule_version"] | 0;
   if (serverVer <= cachedScheduleVersion) return;
 
   String outJson;
-  serializeJson(doc["sessions"], outJson);
+  serializeJson(jsonBuf["sessions"], outJson);
   saveScheduleToPrefs(serverVer, outJson);
-  Serial.printf("Schedule synced, version=%d\n", serverVer);
+  yield();
+  Serial.println("Schedule synced");
 }
 
 void setupPins() {
@@ -340,86 +397,106 @@ void setup() {
   ensureWiFi();
 
   Serial.println("Boot complete.");
-  Serial.print("Last applied desired version: ");
-  Serial.println(lastAppliedVersion);
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("Last applied version: %d\n", lastAppliedVersion);
 }
 
 void loop() {
   ensureWiFi();
+  yield();
 
   uint32_t now = millis();
   bool wifiUp = (WiFi.status() == WL_CONNECTED);
 
-  // Schedule sync when online (every 60s)
-  if (wifiUp && (now - lastSchedulePollMs >= SCHEDULE_POLL_INTERVAL_MS)) {
-    lastSchedulePollMs = now;
-    syncScheduleIfNeeded();
-  }
-
+  // --- Offline mode: schedule-only control ---
   if (!wifiUp) {
-    // Offline: use schedule-derived desired only.
     bool desiredOn = scheduleDerivedDesiredOn();
     bool powerActual = readPowerIn();
-    if (desiredOn != powerActual)
+    if (desiredOn != powerActual && enforceRetries < MAX_ENFORCE_RETRIES) {
       enforceDesired(desiredOn);
-    postTelemetry(lastAppliedVersion, desiredOn, timeSynced, nowEpochUtc(), cachedScheduleVersion);
-    delay(200);
+      enforceRetries++;
+    }
+    delay(5000);
     return;
   }
 
-  // Online: poll desired and reconcile.
+  // --- Schedule sync (every 60s, separate cycle) ---
+  if (now - lastSchedulePollMs >= SCHEDULE_POLL_INTERVAL_MS) {
+    lastSchedulePollMs = now;
+    syncScheduleIfNeeded();
+    delay(200);  // let stack settle after NVS write
+    yield();
+    return;
+  }
+
+  // --- Telemetry (every 10s, separate cycle) ---
+  if (now - lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
+    lastTelemetryMs = now;
+    postTelemetry(lastAppliedVersion, false, timeSynced, nowEpochUtc(), cachedScheduleVersion);
+    return;  // don't do anything else this cycle
+  }
+
+  // --- Poll desired state (every 5s) ---
   if (now - lastPollMs < POLL_INTERVAL_MS) {
-    delay(20);
+    delay(50);
     return;
   }
   lastPollMs = now;
 
-  DynamicJsonDocument desiredDoc(512);
-  String desiredPath = String("/v1/device/") + DEVICE_ID + "/desired";
-  if (!httpGetJson(httpsUrl(desiredPath), DEVICE_TOKEN, desiredDoc)) {
+  // Check if schedule should fire (POST desired=ON once)
+  bool scheduleActive = scheduleDerivedDesiredOn();
+  if (scheduleActive && !scheduleDesiredPosted) {
+    if (postDesiredState(true)) {
+      scheduleDesiredPosted = true;
+      Serial.println("Schedule fired -> desired ON");
+    }
+    return;  // don't do anything else this cycle
+  }
+  if (!scheduleActive) scheduleDesiredPosted = false;
+
+  // GET desired state from server (result goes into shared jsonBuf)
+  String desiredPath = String("/v1/device/") + device_id + "/desired";
+  if (!httpGetJson(apiUrl(desiredPath), device_token)) {
     Serial.println("GET desired failed.");
     return;
   }
 
-  bool serverDesiredOn = desiredDoc["sauna_on"] | false;
-  int desiredVersion = desiredDoc["version"] | 0;
-  bool scheduleActive = scheduleDerivedDesiredOn();
-
-  // Reconciliation: when online, server is source of truth; but if a schedule session is active, keep ON to avoid flipping off.
-  bool desiredOn = serverDesiredOn || scheduleActive;
+  bool desiredOn = jsonBuf["sauna_on"] | false;
+  int desiredVersion = jsonBuf["version"] | 0;
 
   bool powerActual = readPowerIn();
 
-  if (desiredVersion <= lastAppliedVersion && !scheduleActive) {
-    postTelemetry(desiredVersion, desiredOn, true, (int64_t)time(nullptr), cachedScheduleVersion);
+  // No change needed
+  if (desiredVersion <= lastAppliedVersion) return;
+
+  // Already in correct state
+  if (desiredOn == powerActual) {
+    lastAppliedVersion = desiredVersion;
+    prefs.putInt("lastVer", lastAppliedVersion);
+    pendingVersion = -1;
+    enforceRetries = 0;
     return;
   }
 
-  if (desiredOn == powerActual) {
-    if (!scheduleActive)
-      lastAppliedVersion = desiredVersion;
-    prefs.putInt("lastVer", lastAppliedVersion);
-    pendingVersion = -1;
-    postTelemetry(desiredVersion, desiredOn, true, (int64_t)time(nullptr), cachedScheduleVersion);
-    return;
-  }
+  // Stop retrying after MAX_ENFORCE_RETRIES
+  if (enforceRetries >= MAX_ENFORCE_RETRIES) return;
 
   if (pendingVersion != desiredVersion) {
     pendingVersion = desiredVersion;
     lastAttemptMs = 0;
+    enforceRetries = 0;
   }
 
   if (now - lastAttemptMs >= RETRY_COOLDOWN_MS) {
+    Serial.printf("[ENFORCE] attempt %d/%d\n", enforceRetries + 1, MAX_ENFORCE_RETRIES);
     enforceDesired(desiredOn);
     lastAttemptMs = now;
-    bool newActual = readPowerIn();
-    if (newActual == desiredOn) {
-      if (!scheduleActive)
-        lastAppliedVersion = desiredVersion;
+    enforceRetries++;
+    if (readPowerIn() == desiredOn) {
+      lastAppliedVersion = desiredVersion;
       prefs.putInt("lastVer", lastAppliedVersion);
       pendingVersion = -1;
+      enforceRetries = 0;
     }
   }
-
-  postTelemetry(desiredVersion, desiredOn, true, (int64_t)time(nullptr), cachedScheduleVersion);
 }

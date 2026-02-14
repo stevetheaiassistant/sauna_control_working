@@ -174,49 +174,64 @@ If the site won't load from your browser even though the service is running, the
 
 **Other providers:** DigitalOcean (Firewalls), AWS (Security Groups), Linode (Firewalls), Vultr (Firewall) — add inbound rule for TCP 8000.
 
-## 9. Optional: HTTPS with a domain
+## 9. HTTPS with a domain (recommended for production)
 
-If you have a domain (e.g. `sauna-test.yourdomain.com`) pointing at the VPS:
+You need a domain name (e.g. `sauna.yourdomain.com`) with a DNS A record pointing to your VPS IP. Caddy will obtain a free Let's Encrypt certificate automatically.
 
-1. Install a reverse proxy, e.g. Caddy (handles TLS automatically):
+### 9.1 Install Caddy
 
-   ```bash
-   sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-   sudo apt update
-   sudo apt install caddy
-   ```
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install -y caddy
+```
 
-2. Configure Caddy to proxy to the app (replace with your domain):
+### 9.2 Configure Caddy
 
-   ```bash
-   sudo nano /etc/caddy/Caddyfile
-   ```
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
 
-   Add:
+Replace `sauna.yourdomain.com` with your actual domain:
 
-   ```
-   sauna-test.yourdomain.com {
-       reverse_proxy localhost:8000
-   }
-   ```
+```
+sauna.yourdomain.com {
+    reverse_proxy localhost:8000
+}
+```
 
-   Then:
+Save and reload:
 
-   ```bash
-   sudo systemctl reload caddy
-   ```
+```bash
+sudo systemctl reload caddy
+```
 
-3. Open firewall for HTTP/HTTPS:
+### 9.3 Firewall
 
-   ```bash
-   sudo ufw allow 80/tcp
-   sudo ufw allow 443/tcp
-   sudo ufw reload
-   ```
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw reload
+```
 
-4. In the ESP32 `secrets.h`, set `API_HOST` to that domain (e.g. `sauna-test.yourdomain.com`) so the device talks HTTPS to the VPS.
+Also open ports 80 and 443 in your **cloud provider firewall** (IONOS, etc.).
+
+### 9.4 ESP32 configuration
+
+In `secrets.h`, set `API_HOST` to your domain **without** a port (HTTPS uses 443 by default):
+
+```c
+#define SECRET_API_HOST        "sauna.yourdomain.com"
+```
+
+The firmware uses HTTPS when `API_HOST` has no port (e.g. domain only). For plain HTTP during development, use `IP:8000`.
+
+### 9.5 Access the UI
+
+- **HTTPS**: `https://sauna.yourdomain.com/`
+- The sauna app and ESP32 will communicate over encrypted HTTPS.
 
 ---
 

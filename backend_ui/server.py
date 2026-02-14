@@ -272,6 +272,35 @@ def post_telemetry(device_id: str, payload: TelemetryIn, request: Request):
     return {"ok": True}
 
 
+@app.post("/v1/device/{device_id}/desired")
+def device_set_desired(device_id: str, payload: DesiredUpdate, request: Request):
+    """Allow device to set desired state (e.g. when schedule fires)."""
+    require_bearer(request, DEVICE_TOKEN)
+    if device_id != DEVICE_ID:
+        raise HTTPException(status_code=404, detail="Unknown device")
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT sauna_on, version FROM desired_state WHERE device_id = ?", (device_id,))
+    row = cur.fetchone()
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Missing desired state row")
+
+    new_sauna_on = 1 if payload.sauna_on else 0
+    old_sauna_on = int(row["sauna_on"])
+    version = int(row["version"])
+    if new_sauna_on != old_sauna_on:
+        version += 1
+        cur.execute(
+            "UPDATE desired_state SET sauna_on = ?, version = ?, updated_at = ? WHERE device_id = ?",
+            (new_sauna_on, version, utc_now_iso(), device_id),
+        )
+        conn.commit()
+    conn.close()
+    return {"ok": True, "version": version}
+
+
 # --- App endpoints ---
 @app.get("/v1/app/{device_id}/state")
 def app_state(device_id: str, request: Request):
@@ -617,7 +646,7 @@ async function fetchState() {{
     setDot(document.getElementById("powerDot"), telem.power_in);
     setDot(document.getElementById("heatDot"), telem.heat_in);
     document.getElementById("appliedText").textContent = (telem.last_desired_version_applied == null) ? "-" : `v${{telem.last_desired_version_applied}}`;
-    document.getElementById("lastUpdate").textContent = "Updated " + (telem.updated_at || "");
+    document.getElementById("lastUpdate").textContent = telem.updated_at ? new Date(telem.updated_at).toLocaleString() : "";
   }} else {{
     document.getElementById("temp").textContent = "--.-°F";
     setDot(document.getElementById("powerDot"), null);
