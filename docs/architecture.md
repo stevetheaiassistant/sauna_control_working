@@ -42,8 +42,8 @@ sauna_control/
 
 ## Deploy flow
 
-1. From project root: `scp -r backend_ui root@74.208.133.101:/opt/sauna/`
-2. Restart: `ssh root@74.208.133.101 "systemctl restart sauna && systemctl status sauna"`
+1. From project root: `scp -r backend_ui root@74.208.194.144:/opt/sauna/`
+2. Restart: `ssh root@74.208.194.144 "systemctl restart sauna && systemctl status sauna"`
 
 ## ESP32 behavior summary
 

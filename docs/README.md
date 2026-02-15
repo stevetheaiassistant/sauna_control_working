@@ -23,13 +23,13 @@
 - `backend_ui/.env` — SAUNA_DEVICE_TOKEN, SAUNA_APP_TOKEN (server env).
 - `firmware/Sauna_Control_ESP32/secrets.h` — WiFi, API_HOST, DEVICE_TOKEN (device).
 
-**VPS**: Ubuntu on IONOS. Host: `74.208.133.101`. User: `root`. App at `/opt/sauna/backend_ui/`. systemd: `sauna.service`. UI: `https://sauna1.wilsondesignllc.com/`.
+**VPS**: Ubuntu on IONOS. Host: `74.208.194.144`. User: `root`. App at `/opt/sauna/backend_ui/`. systemd: `sauna.service`. UI: `https://sauna.wilsondesignllc.com/`.
 
 **Deploy flow**:
-1. `scp -r backend_ui root@74.208.133.101:/opt/sauna/`
-2. `ssh root@74.208.133.101 "systemctl restart sauna && systemctl status sauna"`
+1. `scp -r backend_ui root@74.208.194.144:/opt/sauna/`
+2. `ssh root@74.208.194.144 "systemctl restart sauna && systemctl status sauna"`
 
 **Common tasks**:
 - Deploy: scp backend_ui, then restart sauna service.
 - Add feature: backend in `server.py`, firmware in `firmware/Sauna_Control_ESP32/Sauna_Control_ESP32.ino`.
-- Debug: `ssh root@74.208.133.101 'journalctl -u sauna -n 50'`
+- Debug: `ssh root@74.208.194.144 'journalctl -u sauna -n 50'`

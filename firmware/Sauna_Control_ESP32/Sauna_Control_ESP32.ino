@@ -11,7 +11,7 @@
 #include "secrets.h"
 static const char* wifi_ssid     = SECRET_WIFI_SSID;
 static const char* wifi_pass     = SECRET_WIFI_PASS;
-static const char* api_host      = SECRET_API_HOST;  // e.g. "sauna1.wilsondesignllc.com" (HTTPS) or "IP:8000" (HTTP)
+static const char* api_host      = SECRET_API_HOST;  // e.g. "sauna.wilsondesignllc.com" (HTTPS) or "IP:8000" (HTTP)
 static const char* device_id     = SECRET_DEVICE_ID;
 static const char* device_token  = SECRET_DEVICE_TOKEN;
 
