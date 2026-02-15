@@ -203,6 +203,35 @@ def get_desired(device_id: str, request: Request):
     }
 
 
+@app.post("/v1/device/{device_id}/desired")
+def device_set_desired(device_id: str, payload: DesiredUpdate, request: Request):
+    """Device can set desired (e.g. when user manually turns off sauna at unit)."""
+    require_bearer(request, DEVICE_TOKEN)
+    if device_id != DEVICE_ID:
+        raise HTTPException(status_code=404, detail="Unknown device")
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT sauna_on, version FROM desired_state WHERE device_id = ?", (device_id,))
+    row = cur.fetchone()
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Missing desired state row")
+
+    new_sauna_on = 1 if payload.sauna_on else 0
+    old_sauna_on = int(row["sauna_on"])
+    version = int(row["version"])
+    if new_sauna_on != old_sauna_on:
+        version += 1
+        cur.execute(
+            "UPDATE desired_state SET sauna_on = ?, version = ?, updated_at = ? WHERE device_id = ?",
+            (new_sauna_on, version, utc_now_iso(), device_id),
+        )
+        conn.commit()
+    conn.close()
+    return {"ok": True, "version": version}
+
+
 @app.get("/v1/device/{device_id}/schedule")
 def get_device_schedule(device_id: str, request: Request, since: Optional[str] = None):
     require_bearer(request, DEVICE_TOKEN)
@@ -511,7 +540,6 @@ UI_HTML = f"""
       margin: 0; padding: 0; background: #f5f5f5; color: #2d3748; line-height: 1.5; }}
     .header {{ width: 100%; height: 220px; background: url("/static/images/header.jpeg") center/cover no-repeat; }}
     .content {{ max-width: 900px; margin: -40px auto 40px; padding: 0 20px; display: grid; grid-template-columns: 1fr 1.8fr; gap: 24px; }}
-    @media (max-width: 700px) {{ .content {{ grid-template-columns: 1fr; margin-top: -20px; }} }}
     .card {{ background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,.08); }}
     .sidebar {{ display: flex; flex-direction: column; align-items: center; text-align: center; }}
     .logo {{ width: 100px; height: 100px; border-radius: 50%; object-fit: cover; margin-bottom: 12px; border: 3px solid #fff; box-shadow: 0 4px 12px rgba(0,0,0,.15); }}
@@ -523,28 +551,29 @@ UI_HTML = f"""
       border: 1px solid #e2e8f0; background: #f7fafc; font-weight: 500; font-size: 14px; }}
     .dot {{ width: 10px; height: 10px; border-radius: 50%; background: #a0aec0; }}
     .dot.green {{ background: #38a169; }} .dot.red {{ background: #e53e3e; }}
-    .big {{ width: 100%; font-size: 16px; padding: 14px 20px; border-radius: 10px; border: none;
-      background: #e07c5a; color: #fff; cursor: pointer; font-weight: 600; margin-top: 8px; }}
-    .big:hover {{ background: #d46a48; }} .big:active {{ transform: translateY(1px); }}
+    .big {{ width: 100%; font-size: 16px; padding: 14px 20px; border-radius: 10px; border: 2px solid transparent;
+      background: #38c4b7; color: #fff; cursor: pointer; font-weight: 600; margin-top: 8px; }}
+    .big:active {{ transform: translateY(1px); }}
+    @media (hover: hover) {{ .big:hover {{ background: #fff; color: #38c4b7; border-color: #38c4b7; }} }}
     .row {{ display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 12px 0; flex-wrap: wrap; }}
     .section {{ margin-top: 24px; padding-top: 20px; border-top: 1px solid #e2e8f0; }}
     .section h3 {{ margin: 0 0 12px 0; font-size: 18px; font-weight: 700; color: #1a202c;
-      padding-bottom: 8px; border-bottom: 3px solid #e07c5a; display: inline-block; }}
+      padding-bottom: 8px; border-bottom: 3px solid #38c4b7; display: inline-block; }}
     .form-row {{ margin: 10px 0; }}
     .form-row label {{ display: block; margin-bottom: 4px; font-size: 13px; color: #718096; }}
     input, select {{ width: 100%; font-size: 14px; padding: 10px 12px; border-radius: 8px;
       border: 1px solid #e2e8f0; background: #fff; color: #2d3748; }}
     .btn {{ font-size: 14px; padding: 10px 16px; border-radius: 8px; border: 1px solid #e2e8f0;
       background: #fff; color: #2d3748; cursor: pointer; font-weight: 500; }}
-    .btn:hover {{ background: #f7fafc; border-color: #cbd5e0; }}
-    .btn-accent {{ background: #e07c5a; color: #fff; border-color: #e07c5a; }}
-    .btn-accent:hover {{ background: #d46a48; border-color: #d46a48; }}
+    .btn-accent {{ background: #38c4b7; color: #fff; border: 2px solid transparent; }}
+    @media (hover: hover) {{ .btn:hover {{ background: #f7fafc; border-color: #cbd5e0; }} .btn-accent:hover {{ background: #fff; color: #38c4b7; border-color: #38c4b7; }} }}
     .schedule-list {{ list-style: none; padding: 0; margin: 12px 0; }}
     .schedule-list li {{ padding: 12px 14px; margin: 8px 0; background: #f7fafc; border-radius: 8px;
       border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }}
     .schedule-list .actions {{ display: flex; gap: 8px; }}
     .auth-grid {{ display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }}
     @media (max-width: 500px) {{ .auth-grid {{ grid-template-columns: 1fr; }} }}
+    @media (max-width: 700px) {{ .content {{ grid-template-columns: 1fr; margin-top: -20px; padding: 0 24px; }} .card {{ padding: 24px 48px !important; }} }}
   </style>
 </head>
 <body>
@@ -580,7 +609,7 @@ UI_HTML = f"""
         </div>
         <button class="btn btn-accent" id="schedAddBtn">Add session</button>
       </div>
-      <div class="section">
+      <div class="section" id="authSection">
         <h3>Auth</h3>
         <div class="auth-grid">
           <div class="form-row" style="margin:0;">
@@ -603,6 +632,9 @@ const scheduleUrl = `/v1/app/${{deviceId}}/schedule`;
 function getToken() {{ return (document.getElementById("token").value || localStorage.getItem("APP_TOKEN") || "").trim(); }}
 
 function loadTokenIntoField() {{ document.getElementById("token").value = localStorage.getItem("APP_TOKEN") || ""; }}
+
+function hideAuthSection() {{ const el = document.getElementById("authSection"); if (el) el.style.display = "none"; }}
+function showAuthSection() {{ const el = document.getElementById("authSection"); if (el) el.style.display = ""; }}
 
 function saveToken() {{
   const t = document.getElementById("token").value.trim();
@@ -633,23 +665,26 @@ async function fetchState() {{
   const token = getToken();
   if (!token) return;
   const res = await fetch(stateUrl, {{ headers: {{ "Authorization": "Bearer " + token }} }});
-  if (!res.ok) {{ document.getElementById("lastUpdate").textContent = "Auth error"; return; }}
+  if (!res.ok) {{ document.getElementById("lastUpdate").textContent = "Auth error"; showAuthSection(); return; }}
+  hideAuthSection();
   const data = await res.json();
   const telem = data.telemetry;
   const desired = data.desired;
   document.getElementById("desiredText").textContent = desired.sauna_on ? "ON" : "OFF";
+  const telemAgeSec = telem && telem.updated_at ? (Date.now() - new Date(telem.updated_at).getTime()) / 1000 : Infinity;
+  const isDisconnected = !telem || telemAgeSec > 15;
   if (telem) {{
     const tf = (telem.temp_f == null) ? "--.-" : telem.temp_f.toFixed(1);
     document.getElementById("temp").textContent = tf + "°F";
     setDot(document.getElementById("powerDot"), telem.power_in);
     setDot(document.getElementById("heatDot"), telem.heat_in);
-    document.getElementById("appliedText").textContent = telem.power_in === true ? "ON" : telem.power_in === false ? "OFF" : "–";
+    document.getElementById("appliedText").textContent = isDisconnected ? "Disconnected" : (telem.power_in === true ? "ON" : telem.power_in === false ? "OFF" : "–");
     document.getElementById("lastUpdate").textContent = telem.updated_at ? new Date(telem.updated_at).toLocaleString() : "";
   }} else {{
     document.getElementById("temp").textContent = "--.-°F";
     setDot(document.getElementById("powerDot"), null);
     setDot(document.getElementById("heatDot"), null);
-    document.getElementById("appliedText").textContent = "–";
+    document.getElementById("appliedText").textContent = "Disconnected";
     document.getElementById("lastUpdate").textContent = "No telemetry yet";
   }}
 }}

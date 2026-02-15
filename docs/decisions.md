@@ -10,6 +10,7 @@
 
 - Session = `start_time_utc` + `enabled`. No preheat, duration, or notes in the UI or API.
 - User or sauna's built-in controller turns the sauna off. No automatic turn-off from schedule.
+- **Manual turn-off**: If user turns off at the sauna after ESP32 turned it on, device detects power OFF for 15 s, stops retrying, and POSTs desired=OFF so the UI reflects OFF.
 - Sessions disappear from the UI 2+ minutes after their start time (executed).
 
 ## Offline schedule

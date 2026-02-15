@@ -59,6 +59,14 @@ int enforceRetries = 0;
 static const int MAX_ENFORCE_RETRIES = 3;
 bool scheduleDesiredPosted = false;  // avoid spamming POST desired
 
+// Manual turn-off: if user turns off at sauna, don't retry; POST desired=OFF so UI reflects it
+#define MANUAL_OFF_DEBOUNCE_MS 15000
+static bool manualTurnOffDetected = false;
+static uint32_t powerOffSinceMs = 0;
+static bool desiredOnWhenPowerWentOff = false;
+static bool manualOffPosted = false;  // only POST desired=OFF once
+static bool lastKnownDesiredOn = false;  // from server GET or schedule (for manual turn-off detection)
+
 // Schedule cache (NVS)
 int cachedScheduleVersion = -1;
 bool scheduleParsed = false;
@@ -97,6 +105,35 @@ static bool useHttps() {
 
 String apiUrl(const String& path) {
   return String(useHttps() ? "https://" : "http://") + api_host + path;
+}
+
+// Check for manual turn-off: power was ON with desired ON, now OFF for 15s -> don't retry, POST desired=OFF.
+void checkManualTurnOff(uint32_t now, bool powerActual, bool desiredOn) {
+  if (powerActual) {
+    powerOffSinceMs = 0;
+    return;
+  }
+  if (powerOffSinceMs == 0) {
+    powerOffSinceMs = now;
+    desiredOnWhenPowerWentOff = desiredOn;
+  }
+  if (desiredOnWhenPowerWentOff && (now - powerOffSinceMs) >= MANUAL_OFF_DEBOUNCE_MS) {
+    manualTurnOffDetected = true;
+    desiredOnWhenPowerWentOff = false;
+    powerOffSinceMs = 0;
+    lastKnownDesiredOn = false;
+    if (!manualOffPosted && WiFi.status() == WL_CONNECTED) {
+      if (postDesiredState(false)) manualOffPosted = true;
+    }
+  }
+}
+
+// Clear manual-turn-off state when schedule window ends (next session can turn on again).
+void maybeClearManualTurnOff() {
+  if (!scheduleDerivedDesiredOnRaw()) {
+    manualTurnOffDetected = false;
+    manualOffPosted = false;
+  }
 }
 
 bool readPowerIn() {
@@ -152,20 +189,23 @@ void syncTimeFromNtp() {
   }
 }
 
-// Returns true if current time is in "on" window: [start_time, start_time + 24h).
-// Turn on at exact start time; no preheat, no duration. User/sauna controller turns off.
-bool scheduleDerivedDesiredOn() {
+// Raw schedule check (no manual-turn-off override).
+static bool scheduleDerivedDesiredOnRaw() {
   int64_t now = nowEpochUtc();
   if (now <= 0) return false;
-
   for (int i = 0; i < scheduleSessionCount; i++) {
     const ScheduleSession& s = scheduleSessions[i];
     if (!s.enabled) continue;
     int64_t end = s.start_epoch + (int64_t)24 * 3600;
-    if (now >= s.start_epoch && now <= end)
-      return true;
+    if (now >= s.start_epoch && now <= end) return true;
   }
   return false;
+}
+
+// Returns true if current time is in "on" window. Returns false when manualTurnOffDetected.
+bool scheduleDerivedDesiredOn() {
+  if (manualTurnOffDetected) return false;
+  return scheduleDerivedDesiredOnRaw();
 }
 
 // Load schedule from NVS JSON string into scheduleSessions[].
@@ -359,13 +399,13 @@ bool httpPostJson(const String& url, const char* bearerToken) {
   return (code >= 200 && code < 300);
 }
 
-// Tell server to set desired state (used when schedule fires).
+// Tell server to set desired state (schedule fires or manual turn-off at sauna).
 bool postDesiredState(bool saunaOn) {
   jsonBuf.clear();
   jsonBuf["sauna_on"] = saunaOn;
   String path = String("/v1/device/") + device_id + "/desired";
   bool ok = httpPostJson(apiUrl(path), device_token);
-  Serial.println(ok ? "Schedule -> desired ON" : "Schedule POST failed");
+  Serial.println(ok ? (saunaOn ? "POST desired ON" : "POST desired OFF (manual turn-off)") : "POST desired failed");
   return ok;
 }
 
@@ -483,10 +523,14 @@ void loop() {
     return;
   }
 
+  bool powerActual = readPowerIn();
+  if (!wifiUp) lastKnownDesiredOn = scheduleDerivedDesiredOnRaw();
+  checkManualTurnOff(now, powerActual, lastKnownDesiredOn);
+  maybeClearManualTurnOff();
+
   // --- Offline mode: schedule-only control ---
   if (!wifiUp) {
     bool desiredOn = scheduleDerivedDesiredOn();
-    bool powerActual = readPowerIn();
     if (desiredOn != powerActual && enforceRetries < MAX_ENFORCE_RETRIES) {
       enforceDesired(desiredOn);
       enforceRetries++;
@@ -523,6 +567,7 @@ void loop() {
   if (scheduleActive && !scheduleDesiredPosted) {
     if (postDesiredState(true)) {
       scheduleDesiredPosted = true;
+      lastKnownDesiredOn = true;
       Serial.println("Schedule fired -> desired ON");
     }
     return;  // don't do anything else this cycle
@@ -537,9 +582,16 @@ void loop() {
   }
 
   bool desiredOn = jsonBuf["sauna_on"] | false;
+  lastKnownDesiredOn = desiredOn;
   int desiredVersion = jsonBuf["version"] | 0;
 
-  bool powerActual = readPowerIn();
+  powerActual = readPowerIn();
+
+  // Don't enforce if user manually turned off at sauna (we'll POST desired=OFF from checkManualTurnOff)
+  if (manualTurnOffDetected) {
+    delay(50);
+    return;
+  }
 
   // No change needed
   if (desiredVersion <= lastAppliedVersion) return;

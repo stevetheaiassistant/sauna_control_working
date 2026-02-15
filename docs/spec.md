@@ -10,7 +10,7 @@
 |-----------|------|
 | **ESP32** | Polls desired state and schedule; drives relays (power toggle, start); reads power/heat inputs and DS18B20 temp; posts telemetry; caches schedule in NVS; uses NTP for offline time |
 | **FastAPI server** | Stores desired state, telemetry, and schedule in SQLite; serves single-page UI; device and app endpoints |
-| **Web UI** | Embedded in server at `/`; shows temp, power/heat status, toggle, schedule (add/edit/delete sessions); uses app token in `localStorage` |
+| **Web UI** | Embedded in server at `/`; shows temp, power/heat status, toggle, schedule (add/edit/delete sessions); uses app token in `localStorage`. Applied shows "NO WiFi" when no telemetry. |
 
 ## Auth
 
@@ -26,6 +26,7 @@ Tokens must match between server `.env` and firmware `secrets.h` (device token).
 | Who | Method | Path | Auth |
 |-----|--------|------|------|
 | Device | GET | `/v1/device/{id}/desired` | Device token |
+| Device | POST | `/v1/device/{id}/desired` | Device token (manual turn-off at sauna) |
 | Device | GET | `/v1/device/{id}/schedule` | Device token |
 | Device | POST | `/v1/device/{id}/telemetry` | Device token |
 | App | GET | `/v1/app/{id}/state` | App token |
@@ -40,6 +41,7 @@ Tokens must match between server `.env` and firmware `secrets.h` (device token).
 
 - **Session**: `start_time_utc` (ISO) + `enabled`. No preheat, duration, or notes. UI shows date and time only.
 - **Device behavior**: Turn ON at `start_time`. No automatic turn OFF from schedule; user or sauna controller turns off.
+- **Manual turn-off**: If the user turns off the sauna at the unit after the ESP32 turned it on (schedule or UI), the device detects power OFF for 15 s, stops retrying, and POSTs desired=OFF so the UI shows Desired: OFF.
 - **Auto-remove**: Sessions disappear from the UI 2+ minutes after their start time (executed).
 - **Offline**: Device caches schedule in NVS; uses NTP-synced time (or millis delta during outage) to run schedule when WiFi is down.
 - **Reconciliation**: When online, server desired is authoritative; if a schedule session is active, device keeps ON even if server says OFF to avoid oscillation.
