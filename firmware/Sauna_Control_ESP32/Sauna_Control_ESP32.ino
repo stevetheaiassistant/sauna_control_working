@@ -17,11 +17,8 @@ static const char* device_token  = SECRET_DEVICE_TOKEN;
 
 // Polling (balance responsiveness vs HTTPS stability)
 static const uint32_t POLL_INTERVAL_MS = 3000;
-static const uint32_t TELEMETRY_INTERVAL_MS = 5000;
+static const uint32_t TELEMETRY_INTERVAL_MS = 3000;
 static const uint32_t SCHEDULE_POLL_INTERVAL_MS = 30000;
-
-// Retry behavior if desired != actual
-static const uint32_t RETRY_COOLDOWN_MS = 10000;
 
 // DS18B20
 static const uint8_t ONE_WIRE_PIN = 26;
@@ -53,18 +50,19 @@ uint32_t lastPollMs = 0;
 uint32_t lastTelemetryMs = 0;
 uint32_t lastSchedulePollMs = 0;
 int lastAppliedVersion = 0;
-int pendingVersion = -1;
-uint32_t lastAttemptMs = 0;
-int enforceRetries = 0;
-static const int MAX_ENFORCE_RETRIES = 3;
 bool scheduleDesiredPosted = false;  // avoid spamming POST desired
 
 // Manual turn-off: if user turns off at sauna, don't retry; POST desired=OFF so UI reflects it
-#define MANUAL_OFF_DEBOUNCE_MS 15000
+// Manual turn-on:  if user turns on at sauna while app says OFF, don't force OFF; POST desired=ON after debounce
+#define MANUAL_OFF_DEBOUNCE_MS 5000
+#define MANUAL_ON_DEBOUNCE_MS  5000
 static bool manualTurnOffDetected = false;
 static uint32_t powerOffSinceMs = 0;
 static bool desiredOnWhenPowerWentOff = false;
 static bool manualOffPosted = false;  // only POST desired=OFF once
+static uint32_t powerOnSinceMs = 0;
+static bool desiredOffWhenPowerCameOn = false;
+static bool manualOnPosted = false;   // only POST desired=ON once
 static bool lastKnownDesiredOn = false;  // from server GET or schedule (for manual turn-off detection)
 
 // Schedule cache (NVS)
@@ -85,6 +83,8 @@ DynamicJsonDocument jsonBuf(2048);
 bool timeSynced = false;
 uint32_t timeSyncedAtMs = 0;
 int64_t epochAtSync = 0;
+static uint32_t lastEpochSaveMs = 0;   // throttle NVS writes so restore-at-boot has fresh time
+#define EPOCH_SAVE_INTERVAL_MS 60000   // save current time to NVS every 60s
 
 // Boot warmup: no HTTP for 15s after boot (WiFi/SSL stack needs time to stabilize)
 static uint32_t bootMs = 0;
@@ -124,6 +124,25 @@ void checkManualTurnOff(uint32_t now, bool powerActual, bool desiredOn) {
     lastKnownDesiredOn = false;
     if (!manualOffPosted && WiFi.status() == WL_CONNECTED) {
       if (postDesiredState(false)) manualOffPosted = true;
+    }
+  }
+}
+
+// Check for manual turn-on: power was OFF with desired OFF, now ON for 15s -> POST desired=ON so UI reflects it; don't enforce OFF.
+void checkManualTurnOn(uint32_t now, bool powerActual, bool desiredOn) {
+  if (!powerActual) {
+    powerOnSinceMs = 0;
+    return;
+  }
+  if (powerOnSinceMs == 0) {
+    powerOnSinceMs = now;
+    desiredOffWhenPowerCameOn = !desiredOn;  // true when desired was OFF when power came on
+  }
+  if (desiredOffWhenPowerCameOn && (now - powerOnSinceMs) >= MANUAL_ON_DEBOUNCE_MS) {
+    desiredOffWhenPowerCameOn = false;
+    powerOnSinceMs = 0;
+    if (!manualOnPosted && WiFi.status() == WL_CONNECTED) {
+      if (postDesiredState(true)) manualOnPosted = true;
     }
   }
 }
@@ -254,11 +273,12 @@ void ensureWiFi() {
       wifiConnectedAtMs = millis();  // defer NTP - don't run immediately
       // Don't print here - print only when we actually run NTP (avoids spam if crash-looping)
     }
-    // Run NTP 3s after first connect (let WiFi stack stabilize) or retry every 90s if failed
+    // Run NTP 3s after first connect (let WiFi stack stabilize) or retry every 90s to correct drift.
+    // Always run when WiFi is up so we get correct time even if we restored from NVS at boot.
     uint32_t sinceConnect = millis() - wifiConnectedAtMs;
     bool firstRun = (lastNtpRetryMs == 0);
     bool retryDue = (!firstRun && (millis() - lastNtpRetryMs > 90000));
-    if (!timeSynced && sinceConnect >= 3000 && (firstRun || retryDue)) {
+    if (sinceConnect >= 3000 && (firstRun || retryDue)) {
       lastNtpRetryMs = millis();
       if (firstRun) Serial.println("WiFi connected, syncing NTP...");
       else Serial.println("Retrying NTP...");
@@ -502,6 +522,15 @@ void setup() {
   cachedScheduleVersion = prefs.getInt("schedVer", -1);
   loadScheduleFromPrefs();
 
+  // Restore time from last NTP sync so schedule works after reboot when WiFi is down.
+  int64_t storedEpoch = prefs.getLong("epoch", 0);
+  if (storedEpoch >= 1000000000) {
+    timeSynced = true;
+    timeSyncedAtMs = 0;  // boot = reference point; time advances from here
+    epochAtSync = storedEpoch;
+    Serial.println("Time restored from NVS (last NTP)");
+  }
+
   ensureWiFi();
 
   Serial.println("Boot complete.");
@@ -523,18 +552,23 @@ void loop() {
     return;
   }
 
+  // Keep NVS epoch fresh so restore-at-boot gives correct time (schedule works after reboot offline).
+  if (timeSynced && (now - lastEpochSaveMs >= EPOCH_SAVE_INTERVAL_MS)) {
+    lastEpochSaveMs = now;
+    prefs.putULong("syncMs", millis());
+    prefs.putLong("epoch", nowEpochUtc());
+  }
+
   bool powerActual = readPowerIn();
   if (!wifiUp) lastKnownDesiredOn = scheduleDerivedDesiredOnRaw();
   checkManualTurnOff(now, powerActual, lastKnownDesiredOn);
+  checkManualTurnOn(now, powerActual, lastKnownDesiredOn);
   maybeClearManualTurnOff();
 
   // --- Offline mode: schedule-only control ---
   if (!wifiUp) {
     bool desiredOn = scheduleDerivedDesiredOn();
-    if (desiredOn != powerActual && enforceRetries < MAX_ENFORCE_RETRIES) {
-      enforceDesired(desiredOn);
-      enforceRetries++;
-    }
+    if (desiredOn != powerActual) enforceDesired(desiredOn);
     delay(5000);
     return;
   }
@@ -585,7 +619,20 @@ void loop() {
   lastKnownDesiredOn = desiredOn;
   int desiredVersion = jsonBuf["version"] | 0;
 
+  // When app/user explicitly requests ON, clear manual-turn-off lock so we actually fire relays.
+  // When server says ON, clear manual-turn-on state (we're in sync).
+  if (desiredOn) {
+    manualTurnOffDetected = false;
+    manualOffPosted = false;
+    powerOnSinceMs = 0;
+    desiredOffWhenPowerCameOn = false;
+    manualOnPosted = false;
+  }
+
   powerActual = readPowerIn();
+
+  // After GET we have fresh desiredOn; update manual-turn-on timer with it
+  checkManualTurnOn(now, powerActual, desiredOn);
 
   // Don't enforce if user manually turned off at sauna (we'll POST desired=OFF from checkManualTurnOff)
   if (manualTurnOffDetected) {
@@ -593,39 +640,40 @@ void loop() {
     return;
   }
 
-  // No change needed
-  if (desiredVersion <= lastAppliedVersion) return;
-
-  // Already in correct state
+  // Already in correct state: nothing to do (and keep version in sync)
   if (desiredOn == powerActual) {
     lastAppliedVersion = desiredVersion;
     prefs.putInt("lastVer", lastAppliedVersion);
-    pendingVersion = -1;
-    enforceRetries = 0;
     return;
   }
 
-  // Stop retrying after MAX_ENFORCE_RETRIES
-  if (enforceRetries >= MAX_ENFORCE_RETRIES) return;
-
-  if (pendingVersion != desiredVersion) {
-    pendingVersion = desiredVersion;
-    lastAttemptMs = 0;
-    enforceRetries = 0;
+  // Power is off but desired is ON: wait in debounce window before re-enforcing ON.
+  // If user just turned off manually, we must not turn it back on; after 15s we'll set manualTurnOffDetected and POST desired=OFF.
+  if (desiredOn && !powerActual && powerOffSinceMs != 0 && desiredOnWhenPowerWentOff
+      && (now - powerOffSinceMs) < MANUAL_OFF_DEBOUNCE_MS) {
+    delay(50);
+    return;
   }
 
-  if (now - lastAttemptMs >= RETRY_COOLDOWN_MS) {
-    Serial.printf("[ENFORCE] attempt %d/%d\n", enforceRetries + 1, MAX_ENFORCE_RETRIES);
-    yield();
-    enforceDesired(desiredOn);
-    lastAttemptMs = now;
-    enforceRetries++;
-    delay(useHttps() ? 800 : 500);  // settle after relay
-    if (readPowerIn() == desiredOn) {
-      lastAppliedVersion = desiredVersion;
-      prefs.putInt("lastVer", lastAppliedVersion);
-      pendingVersion = -1;
-      enforceRetries = 0;
-    }
+  // Power is ON but desired is OFF: wait in debounce window before enforcing OFF.
+  // If user just turned on manually, we must not turn it off; after 15s we'll POST desired=ON so UI matches.
+  if (!desiredOn && powerActual && powerOnSinceMs != 0 && desiredOffWhenPowerCameOn
+      && (now - powerOnSinceMs) < MANUAL_ON_DEBOUNCE_MS) {
+    delay(50);
+    return;
+  }
+
+  // Version unchanged but we're out of sync (e.g. manual turn-off at sauna, or server/DB reset).
+  // Allow enforcement by treating as needing apply.
+  if (desiredVersion <= lastAppliedVersion) {
+    lastAppliedVersion = desiredVersion - 1;
+  }
+
+  yield();
+  enforceDesired(desiredOn);
+  delay(useHttps() ? 800 : 500);  // settle after relay
+  if (readPowerIn() == desiredOn) {
+    lastAppliedVersion = desiredVersion;
+    prefs.putInt("lastVer", lastAppliedVersion);
   }
 }
