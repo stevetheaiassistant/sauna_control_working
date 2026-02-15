@@ -17,17 +17,17 @@ python3 --version
 
 ## 2. Get the code
 
-**Option A – Clone from GitHub (main branch):**
+**Option A – Clone from GitHub:**
 
 ```bash
 sudo mkdir -p /opt/sauna
 sudo chown "$USER:$USER" /opt/sauna
 cd /opt/sauna
-git clone https://github.com/stevetheaiassistant/sauna_control.git .
+git clone https://github.com/stevetheaiassistant/sauna_control_working.git .
 cd backend_ui
 ```
 
-This clones the **main** branch (stable: toggle + telemetry + schedule). The app runs from the `backend_ui` directory (where `server.py` and `requirements.txt` live).
+This clones the default branch. Use `git checkout On-Scheduling` for the schedule branch. The app runs from the `backend_ui` directory (where `server.py` and `requirements.txt` live).
 
 **If Git asks for username/password:** GitHub no longer accepts account passwords for HTTPS. Use one of these:
 
@@ -42,7 +42,7 @@ This clones the **main** branch (stable: toggle + telemetry + schedule). The app
 
   ```bash
   cd /opt/sauna
-  git clone git@github.com:stevetheaiassistant/sauna_control.git .
+  git clone git@github.com:stevetheaiassistant/sauna_control_working.git .
   cd backend_ui
   ```
 

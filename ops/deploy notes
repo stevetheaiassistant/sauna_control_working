@@ -1,7 +1,9 @@
 # Deploy notes
 
-- **VPS**: Ubuntu on IONOS. Host: `74.208.194.144`. User: `root`. SSH key auth configured. App in `/opt/sauna/backend_ui/`. systemd: `sauna.service`. UI: `https://sauna.wilsondesignllc.com/`.
-- **Deploy command** (after push): `ssh root@74.208.194.144 'cd /opt/sauna && git pull origin On-Scheduling && systemctl restart sauna'`
+- **VPS**: Ubuntu on IONOS. Host: `74.208.194.144`. User: `root`. App in `/opt/sauna/backend_ui/`. systemd: `sauna.service`. UI: `https://sauna.wilsondesignllc.com/`.
+- **First-time SSH**: Run `ssh-copy-id root@74.208.194.144` (enter password once) for passwordless deploys.
+- **Fresh deploy**: `./ops/deploy.sh fresh` — copies backend_ui, installs deps, venv, systemd.
+- **Update deploy**: `./ops/deploy.sh` — scp + restart.
 - **Credentials**: `ops/local-credentials` (gitignored) — VPS SSH, tokens. Never commit.
 - **Firewall**: UFW allows 8000. IONOS Firewall Policies must allow inbound TCP 8000 (Server & Cloud → Network → Firewall Policies).
 - **Clone**: Use `On-Scheduling` branch. GitHub HTTPS requires PAT when cloning on VPS.

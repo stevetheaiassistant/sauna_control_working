@@ -22,11 +22,11 @@ In Terminal (on your Mac), from the project folder:
 
 ```bash
 cd /Users/wilson_design_ai/Documents/sauna_control
-git remote set-url origin git@github.com:stevetheaiassistant/sauna_control.git
+git remote set-url origin git@github.com:stevetheaiassistant/sauna_control_working.git
 git remote -v
 ```
 
-You should see `origin  git@github.com:stevetheaiassistant/sauna_control.git`.
+You should see `origin  git@github.com:stevetheaiassistant/sauna_control_working.git`.
 
 **2. Make sure GitHub has your SSH key**
 

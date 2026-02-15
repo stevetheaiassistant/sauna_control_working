@@ -30,7 +30,7 @@ pip install -r requirements.txt
 uvicorn server:app --reload
 ```
 
-Open http://127.0.0.1:8000 for the UI. To run on an Ubuntu VPS (systemd, HTTPS with Caddy): [docs/deploy-ubuntu.md](docs/deploy-ubuntu.md).
+Open http://127.0.0.1:8000 for the UI. **Production:** [https://sauna.wilsondesignllc.com](https://sauna.wilsondesignllc.com). To run on an Ubuntu VPS (systemd, HTTPS with Caddy): [docs/deploy-ubuntu.md](docs/deploy-ubuntu.md).
 
 ## Firmware (ESP32)
 Open the sketch from `firmware/Sauna_Control_ESP32/` in Arduino IDE or PlatformIO. Copy `firmware/Sauna_Control_ESP32/secrets.h.example` to `firmware/Sauna_Control_ESP32/secrets.h` and set WiFi, API host, device id, and device token (same value as `SAUNA_DEVICE_TOKEN` on the server). Do not commit `secrets.h`.
