@@ -552,9 +552,14 @@ UI_HTML = f"""
     .dot {{ width: 10px; height: 10px; border-radius: 50%; background: #a0aec0; }}
     .dot.green {{ background: #38a169; }} .dot.red {{ background: #e53e3e; }}
     .big {{ width: 100%; font-size: 16px; padding: 14px 20px; border-radius: 10px; border: 2px solid transparent;
-      background: #38c4b7; color: #fff; cursor: pointer; font-weight: 600; margin-top: 8px; }}
+      background: #38c4b7; color: #fff; cursor: pointer; font-weight: 600; margin-top: 8px; transition: opacity 0.2s; }}
     .big:active {{ transform: translateY(1px); }}
-    @media (hover: hover) {{ .big:hover {{ background: #fff; color: #38c4b7; border-color: #38c4b7; }} }}
+    .big.pending {{ cursor: not-allowed; opacity: 0.9; animation: pulse-btn 1.2s ease-in-out infinite; }}
+    .big.pending:hover {{ background: #38c4b7; color: #fff; border-color: transparent; }}
+    .big.disconnected {{ cursor: not-allowed; background: #a0aec0; color: #fff; }}
+    .big.disconnected:hover {{ background: #a0aec0; color: #fff; border-color: transparent; }}
+    @keyframes pulse-btn {{ 0%, 100% {{ opacity: 0.9; box-shadow: 0 0 0 0 rgba(56, 196, 183, 0.5); }} 50% {{ opacity: 1; box-shadow: 0 0 0 8px rgba(56, 196, 183, 0); }} }}
+    @media (hover: hover) {{ .big:hover:not(.pending) {{ background: #fff; color: #38c4b7; border-color: #38c4b7; }} }}
     .row {{ display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 12px 0; flex-wrap: wrap; }}
     .section {{ margin-top: 24px; padding-top: 20px; border-top: 1px solid #e2e8f0; }}
     .section h3 {{ margin: 0 0 12px 0; font-size: 18px; font-weight: 700; color: #1a202c;
@@ -661,6 +666,59 @@ function localToUtcIso(dateStr, timeStr) {{
   return d.toISOString();
 }}
 
+let pendingDesired = null;
+let pendingSince = 0;
+let successState = null;
+const PENDING_TIMEOUT_MS = 60000;
+
+function setToggleBtnState(text, opts) {{
+  const {{ pulse = false, disabled = false, disconnected = false }} = opts || {{}};
+  const btn = document.getElementById("toggleBtn");
+  btn.textContent = text;
+  btn.disabled = disabled;
+  btn.classList.toggle("pending", pulse);
+  btn.classList.toggle("disconnected", disconnected);
+}}
+
+function updateToggleButton(isDisconnected, appliedValue, telemAgeSec) {{
+  const now = Date.now();
+  if (successState) {{
+    if (now >= successState.until) {{
+      successState = null;
+      setToggleBtnState("Toggle Sauna", {{ pulse: false, disabled: false }});
+    }} else {{
+      setToggleBtnState(successState.label, {{ pulse: false, disabled: true }});
+    }}
+    return;
+  }}
+  if (isDisconnected && pendingDesired === null) {{
+    setToggleBtnState("Trying to Connect…", {{ pulse: false, disabled: true, disconnected: true }});
+    return;
+  }}
+  if (pendingDesired !== null) {{
+    if (now - pendingSince > PENDING_TIMEOUT_MS) {{
+      pendingDesired = null;
+      setToggleBtnState("Toggle Sauna", {{ pulse: false, disabled: false }});
+      return;
+    }}
+    const telemFresh = telemAgeSec < 15;
+    if (telemFresh && appliedValue !== null && appliedValue !== undefined && appliedValue === pendingDesired) {{
+      const label = pendingDesired ? "Power On!" : "Power Off!";
+      successState = {{ label, until: now + 2000 }};
+      pendingDesired = null;
+      setToggleBtnState(label, {{ pulse: false, disabled: true }});
+      setTimeout(() => {{
+        successState = null;
+        setToggleBtnState("Toggle Sauna", {{ pulse: false, disabled: false }});
+      }}, 2000);
+      return;
+    }}
+    setToggleBtnState("Sending…", {{ pulse: true, disabled: true }});
+    return;
+  }}
+  setToggleBtnState("Toggle Sauna", {{ pulse: false, disabled: false }});
+}}
+
 async function fetchState() {{
   const token = getToken();
   if (!token) return;
@@ -673,20 +731,22 @@ async function fetchState() {{
   document.getElementById("desiredText").textContent = desired.sauna_on ? "ON" : "OFF";
   const telemAgeSec = telem && telem.updated_at ? (Date.now() - new Date(telem.updated_at).getTime()) / 1000 : Infinity;
   const isDisconnected = !telem || telemAgeSec > 15;
+  const appliedValue = telem && telem.power_in !== null && telem.power_in !== undefined ? telem.power_in : null;
   if (telem) {{
     const tf = (telem.temp_f == null) ? "--.-" : telem.temp_f.toFixed(1);
     document.getElementById("temp").textContent = tf + "°F";
     setDot(document.getElementById("powerDot"), telem.power_in);
     setDot(document.getElementById("heatDot"), telem.heat_in);
-    document.getElementById("appliedText").textContent = isDisconnected ? "Disconnected" : (telem.power_in === true ? "ON" : telem.power_in === false ? "OFF" : "–");
+    document.getElementById("appliedText").textContent = pendingDesired !== null ? "Pending…" : (isDisconnected ? "Disconnected" : (telem.power_in === true ? "ON" : telem.power_in === false ? "OFF" : "–"));
     document.getElementById("lastUpdate").textContent = telem.updated_at ? new Date(telem.updated_at).toLocaleString() : "";
   }} else {{
     document.getElementById("temp").textContent = "--.-°F";
     setDot(document.getElementById("powerDot"), null);
     setDot(document.getElementById("heatDot"), null);
-    document.getElementById("appliedText").textContent = "Disconnected";
+    document.getElementById("appliedText").textContent = pendingDesired !== null ? "Pending…" : "Disconnected";
     document.getElementById("lastUpdate").textContent = "No telemetry yet";
   }}
+  updateToggleButton(isDisconnected, appliedValue, telemAgeSec);
 }}
 
 let scheduleSessionsList = [];
@@ -756,11 +816,17 @@ async function deleteSession(id) {{
 async function toggleDesired() {{
   const token = getToken();
   if (!token) return;
+  const btn = document.getElementById("toggleBtn");
+  if (btn.disabled) return;
+  setToggleBtnState("Sending…", {{ pulse: true, disabled: true }});
   const res = await fetch(stateUrl, {{ headers: {{ "Authorization": "Bearer " + token }} }});
-  if (!res.ok) return;
+  if (!res.ok) {{ setToggleBtnState("Toggle Sauna", {{ pulse: false, disabled: false }}); return; }}
   const data = await res.json();
   const next = !data.desired.sauna_on;
-  await fetch(desiredUrl, {{ method: "POST", headers: {{ "Authorization": "Bearer " + token, "Content-Type": "application/json" }}, body: JSON.stringify({{ sauna_on: next }}) }});
+  const postRes = await fetch(desiredUrl, {{ method: "POST", headers: {{ "Authorization": "Bearer " + token, "Content-Type": "application/json" }}, body: JSON.stringify({{ sauna_on: next }}) }});
+  if (!postRes.ok) {{ setToggleBtnState("Toggle Sauna", {{ pulse: false, disabled: false }}); return; }}
+  pendingDesired = next;
+  pendingSince = Date.now();
   fetchState();
 }}
 
